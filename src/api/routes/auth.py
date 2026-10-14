@@ -450,12 +450,80 @@ def gitlab_login_instances():
     """Public login choices contain no OAuth credentials."""
     from src.user.gitlab_config import login_instances
     mode, instances = login_instances()
-    return {'mode': mode, 'instances': [{k: item[k] for k in ('id', 'name', 'base_url')}
-                                       for item in instances]}
+    return {'mode': mode, 'instances': [dict({k: item[k] for k in ('id', 'name', 'base_url', 'allow_token_login')},
+                                              oauth_ready=bool(item.get('client_id') and item.get('client_secret')
+                                                                           and item.get('redirect_uri')))
+                                        for item in instances]}
+
+
+class GitlabTokenLogin(BaseModel):
+    instance: str = ''
+    token: str
+
+
+@router.post('/gitlab/token-login')
+def gitlab_token_login(body: GitlabTokenLogin, response: Response):
+    """GitLab PAT 登录：实例禁用「添加新应用」时，用个人访问令牌代替 OAuth 应用。
+
+    流程与 OAuth 回调同构：PRIVATE-TOKEN 调 /api/v4/user 验证身份 → 白名单 →
+    复用 gitlab_identities 映射（同一 GitLab 账号与 OAuth 登录落同一 Grape 账号）。
+    Token 仅用于本次验证，不落库（login-only，与 OAuth 口径一致）。
+    """
+    import re
+    import requests
+    from src.user.gitlab_config import get_login_instance
+    from src.user.gitlab_identity import resolve_user
+    supplied = body.token.strip()
+    if not re.fullmatch(r'[A-Za-z0-9_\-]{20,}', supplied):
+        raise HTTPException(400, detail={'message': 'GitLab Token 格式不正确'})
+    try:
+        config = get_login_instance(body.instance)
+    except ValueError as exc:
+        raise HTTPException(400, detail={'message': str(exc)}) from exc
+    if not config.get('allow_token_login'):
+        raise HTTPException(403, detail={'message': '该 GitLab 实例未开启 Token 登录'})
+    try:
+        user_response = requests.get(config['base_url'] + '/api/v4/user',
+                                     headers={'PRIVATE-TOKEN': supplied},
+                                     timeout=15, allow_redirects=False)
+        if user_response.status_code in (401, 403):
+            # 400 而非 401：前端 API 层对 401 触发 JWT refresh/跳登录，会掩盖真实错误
+            raise HTTPException(400, detail={'message': 'GitLab Token 无效或已过期'})
+        user_response.raise_for_status()
+        profile = user_response.json()
+        if not profile.get('id') or not profile.get('username'):
+            raise ValueError('Missing user identity')
+    except HTTPException:
+        raise
+    except Exception:
+        # Upstream errors may contain codes/tokens; never put them in logs or URLs.
+        log.warning('GitLab token login upstream failed for instance=%s', config['id'])
+        raise HTTPException(502, detail={'message': 'GitLab 实例连接失败，请检查实例地址与网络后重试'})
+    allowed = config.get('allowed_usernames', [])
+    if allowed and profile['username'] not in allowed:
+        raise HTTPException(403, detail={'message': '此 GitLab 账号不在该实例的登录白名单内'})
+    user = resolve_user(config['base_url'], profile)
+    # Login-only scope: do not retain the token; same identity payload as OAuth.
+    if not user_db.set_credential(user['id'], 'gitlab_login', {
+        'base_url': config['base_url'], 'gitlab_user_id': str(profile['id']),
+        'username': profile['username'], 'instance': config['id'],
+    }):
+        raise HTTPException(500, detail={'message': '保存 GitLab 登录身份失败'})
+    account = user_db.get_user_account(user['username']) or {}
+    account['nickname'] = profile.get('name') or profile['username']
+    user_db.save_user_account(user['username'], account)
+    from src.api.jwt_utils import create_access_token, create_refresh_token
+    version = user_db.get_token_version(user['id'])
+    jwt_access = create_access_token(user['id'], user['username'], version,
+                                     login_provider='gitlab', login_instance=config['id'])
+    jwt_refresh = create_refresh_token(user['id'], user['username'], version,
+                                       login_provider='gitlab', login_instance=config['id'])
+    _set_refresh_cookie(response, jwt_refresh)
+    return {'token': jwt_access, 'user': {'id': user['id'], 'username': user['username']}}
 
 
 @router.get('/login/gitlab')
-def gitlab_oauth_login(response: Response, instance: str = ''):
+def gitlab_oauth_login(request: Request, response: Response, instance: str = ''):
     import base64
     import secrets
     from urllib.parse import urlencode
@@ -473,7 +541,8 @@ def gitlab_oauth_login(response: Response, instance: str = ''):
     })
     # Per-state cookie supports concurrent login tabs and binds callback to the
     # browser that initiated it. Lax is required for the cross-site GET callback.
-    response.set_cookie('gitlab_oauth_' + state, state, httponly=True, secure=COOKIE_SECURE,
+    is_secure = COOKIE_SECURE and (request.url.scheme == 'https')
+    response.set_cookie('gitlab_oauth_' + state, state, httponly=True, secure=is_secure,
                         samesite='lax', max_age=600, path=_app_base() + _COOKIE_PATH)
     query = urlencode(dict(client_id=config['client_id'], redirect_uri=config['redirect_uri'],
                            response_type='code', scope='read_user', state=state,
@@ -564,7 +633,7 @@ def gitea_instances():
 
 
 @router.get('/login/gitea')
-def gitea_oauth_login(response: Response, instance: str = ''):
+def gitea_oauth_login(request: Request, response: Response, instance: str = ''):
     """发起 Gitea OAuth 登录，生成防重放 state 与 PKCE 码并在 Cookie 中存储校验状态。"""
     import base64
     import hashlib
@@ -582,7 +651,8 @@ def gitea_oauth_login(response: Response, instance: str = ''):
         'instance': config['id'], 'base_url': config['base_url'],
         'client_id': config['client_id'], 'redirect_uri': config['redirect_uri'], 'verifier': verifier,
     })
-    response.set_cookie('gitea_oauth_' + state, state, httponly=True, secure=COOKIE_SECURE,
+    is_secure = COOKIE_SECURE and (request.url.scheme == 'https')
+    response.set_cookie('gitea_oauth_' + state, state, httponly=True, secure=is_secure,
                         samesite='lax', max_age=600, path=_app_base() + _COOKIE_PATH)
     query = urlencode(dict(client_id=config['client_id'], redirect_uri=config['redirect_uri'],
                            response_type='code', state=state,
