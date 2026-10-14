@@ -115,6 +115,7 @@ def save_config(payload: dict) -> dict:
         from src.user.gitea_config import validate_config as gitea_validate_config
         data.update(gitea_validate_config(data, previous))
     # 落盘：原子写（先写临时文件再 rename）
+    os.makedirs(os.path.dirname(_GBT_PATH), exist_ok=True)
     tmp = _GBT_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
