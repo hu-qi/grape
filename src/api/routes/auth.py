@@ -450,10 +450,13 @@ def gitlab_login_instances():
     """Public login choices contain no OAuth credentials."""
     from src.user.gitlab_config import login_instances
     mode, instances = login_instances()
-    return {'mode': mode, 'instances': [dict({k: item[k] for k in ('id', 'name', 'base_url', 'allow_token_login')},
-                                              oauth_ready=bool(item.get('client_id') and item.get('client_secret')
-                                                                           and item.get('redirect_uri')))
-                                        for item in instances]}
+    return {'mode': mode, 'instances': [dict(
+        id=item.get('id', ''),
+        name=item.get('name', ''),
+        base_url=item.get('base_url', ''),
+        allow_token_login=bool(item.get('allow_token_login', False)),
+        oauth_ready=bool(item.get('client_id') and item.get('client_secret') and item.get('redirect_uri'))
+    ) for item in instances]}
 
 
 class GitlabTokenLogin(BaseModel):
