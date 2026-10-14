@@ -42,7 +42,7 @@ def validate_jwt_secret() -> bool:
 
 
 def create_access_token(user_id: int, username: str, token_version: int = 0,
-                        login_provider: str = "", role: str = "") -> str:
+                        login_provider: str = "", role: str = "", login_instance: str = "") -> str:
     """签发 access token——短有效期（15 分钟），用于 API 请求。
 
     access_token 不带 max_exp——30 天上限只管控 refresh 长令牌。
@@ -60,13 +60,15 @@ def create_access_token(user_id: int, username: str, token_version: int = 0,
     }
     if login_provider:
         payload["login_provider"] = login_provider
+    if login_instance:
+        payload["login_instance"] = login_instance
     if role:
         payload["role"] = role
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def create_refresh_token(user_id: int, username: str, token_version: int = 0,
-                         max_exp: int = None, login_provider: str = "", role: str = "") -> str:
+                         max_exp: int = None, login_provider: str = "", role: str = "", login_instance: str = "") -> str:
     """签发 refresh token——长有效期（7 天滚动）+ 绝对上限（30 天）。
 
     max_exp：绝对过期时间戳（首次签发时 = now + 30 天）。
@@ -91,6 +93,8 @@ def create_refresh_token(user_id: int, username: str, token_version: int = 0,
     }
     if login_provider:
         payload["login_provider"] = login_provider
+    if login_instance:
+        payload["login_instance"] = login_instance
     if role:
         payload["role"] = role
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)

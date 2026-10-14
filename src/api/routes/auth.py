@@ -107,9 +107,11 @@ def refresh_token(request: Request, response: Response):
     # login_provider 也从旧 refresh_token 继承——保证刷新后仍按登录平台选择 provider
     old_max_exp = int(payload.get("max_exp", 0))
     old_login_provider = payload.get("login_provider", "")
-    new_access_token = create_access_token(uid, username, db_ver, login_provider=old_login_provider)
+    old_login_instance = payload.get("login_instance", "")
+    new_access_token = create_access_token(uid, username, db_ver, login_provider=old_login_provider,
+                                           login_instance=old_login_instance)
     new_refresh_token = create_refresh_token(uid, username, db_ver, max_exp=old_max_exp,
-                                             login_provider=old_login_provider)
+                                             login_provider=old_login_provider, login_instance=old_login_instance)
     _set_refresh_cookie(response, new_refresh_token)
     return {"token": new_access_token}
 
@@ -427,6 +429,9 @@ def get_profile(user: dict = Depends(require_no_session_token)):
         "status": "online",
         "managed_repos": managed,
         "gitcode_bound": bool(user_db.get_credential(user["id"], "gitcode_oauth")),
+        "gitlab_bound": bool(user_db.get_credential(user["id"], "gitlab_login")),
+        "login_provider": user.get("login_provider", ""),
+        "login_instance": user.get("login_instance", ""),
         "github_bound": bool(user_db.get_credential(user["id"], "github_oauth")),
     }
 
@@ -438,3 +443,220 @@ def logout(user: dict = Depends(require_no_session_token), response: Response = 
     if response:
         _clear_refresh_cookie(response)
     return {"message": "已登出"}
+
+
+@router.get('/gitlab/instances')
+def gitlab_login_instances():
+    """Public login choices contain no OAuth credentials."""
+    from src.user.gitlab_config import login_instances
+    mode, instances = login_instances()
+    return {'mode': mode, 'instances': [{k: item[k] for k in ('id', 'name', 'base_url')}
+                                       for item in instances]}
+
+
+@router.get('/login/gitlab')
+def gitlab_oauth_login(response: Response, instance: str = ''):
+    import base64
+    import secrets
+    from urllib.parse import urlencode
+    from src.user.gitlab_config import get_login_instance
+    try:
+        config = get_login_instance(instance)
+    except ValueError as exc:
+        raise HTTPException(400, detail={'message': str(exc)}) from exc
+    state = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+    user_db.save_oauth_state(state, 'gitlab', {
+        'instance': config['id'], 'base_url': config['base_url'],
+        'client_id': config['client_id'], 'redirect_uri': config['redirect_uri'], 'verifier': verifier,
+    })
+    # Per-state cookie supports concurrent login tabs and binds callback to the
+    # browser that initiated it. Lax is required for the cross-site GET callback.
+    response.set_cookie('gitlab_oauth_' + state, state, httponly=True, secure=COOKIE_SECURE,
+                        samesite='lax', max_age=600, path=_app_base() + _COOKIE_PATH)
+    query = urlencode(dict(client_id=config['client_id'], redirect_uri=config['redirect_uri'],
+                           response_type='code', scope='read_user', state=state,
+                           code_challenge=challenge, code_challenge_method='S256'))
+    return {'redirect_url': config['base_url'] + '/oauth/authorize?' + query}
+
+
+@router.get('/callback/gitlab')
+def gitlab_oauth_callback(request: Request, code: str = '', state: str = '', error: str = ''):
+    import hmac
+    import re
+    import requests
+    from urllib.parse import urlencode
+    from src.user.gitlab_config import get_login_instance
+    from src.user.gitlab_identity import resolve_user
+    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', state) or not hmac.compare_digest(
+            request.cookies.get('gitlab_oauth_' + state, ''), state):
+        raise HTTPException(400, detail={'message': 'GitLab 登录 state 无效或浏览器不匹配'})
+    saved = user_db.validate_oauth_state(state, 'gitlab')
+    if not saved:
+        raise HTTPException(400, detail={'message': 'GitLab 登录已过期或已使用'})
+    try:
+        config = get_login_instance(saved['instance'])
+        if any(config[k] != saved[k] for k in ('base_url', 'client_id', 'redirect_uri')):
+            raise ValueError('GitLab 登录配置已变更，请重新登录')
+    except ValueError as exc:
+        raise HTTPException(400, detail={'message': str(exc)}) from exc
+    if error or not code:
+        return _oauth_error_redirect(request, 'GitLab 授权已取消或未返回授权码')
+    try:
+        token_response = requests.post(config['base_url'] + '/oauth/token', data={
+            'grant_type': 'authorization_code', 'client_id': config['client_id'],
+            'client_secret': config['client_secret'], 'redirect_uri': saved['redirect_uri'],
+            'code': code, 'code_verifier': saved['verifier'],
+        }, timeout=15, allow_redirects=False)
+        token_response.raise_for_status()
+        token_data = token_response.json()
+        access_token = token_data.get('access_token', '')
+        if not access_token:
+            raise ValueError('Missing access token')
+        user_response = requests.get(config['base_url'] + '/api/v4/user',
+                                     headers={'Authorization': 'Bearer ' + access_token},
+                                     timeout=15, allow_redirects=False)
+        user_response.raise_for_status()
+        profile = user_response.json()
+        if not profile.get('id') or not profile.get('username'):
+            raise ValueError('Missing user identity')
+    except Exception:
+        # Upstream errors may contain codes/tokens; never put them in logs or URLs.
+        log.warning('GitLab OAuth upstream exchange failed for instance=%s', config['id'])
+        return _oauth_error_redirect(request, 'GitLab 登录失败，请检查应用配置、证书与网络后重试')
+    allowed = config.get('allowed_usernames', [])
+    if allowed and profile['username'] not in allowed:
+        return _oauth_error_redirect(request, '此 GitLab 账号不在该实例的登录白名单内')
+    user = resolve_user(config['base_url'], profile)
+    # Login-only scope: do not retain upstream tokens or inject them into agents.
+    if not user_db.set_credential(user['id'], 'gitlab_login', {
+        'base_url': config['base_url'], 'gitlab_user_id': str(profile['id']),
+        'username': profile['username'], 'instance': config['id'],
+    }):
+        raise HTTPException(500, detail={'message': '保存 GitLab 登录身份失败'})
+    account = user_db.get_user_account(user['username']) or {}
+    account['nickname'] = profile.get('name') or profile['username']
+    user_db.save_user_account(user['username'], account)
+    from src.api.jwt_utils import create_access_token, create_refresh_token
+    version = user_db.get_token_version(user['id'])
+    jwt_access = create_access_token(user['id'], user['username'], version,
+                                     login_provider='gitlab', login_instance=config['id'])
+    jwt_refresh = create_refresh_token(user['id'], user['username'], version,
+                                       login_provider='gitlab', login_instance=config['id'])
+    resp = RedirectResponse(_app_base() + '/?' + urlencode({'token': jwt_access}), status_code=302)
+    _set_refresh_cookie(resp, jwt_refresh)
+    resp.delete_cookie('gitlab_oauth_' + state, path=_app_base() + _COOKIE_PATH)
+    return resp
+
+
+# ====== Gitea OAuth ======
+
+@router.get('/gitea/instances')
+def gitea_instances():
+    """返回启用的 Gitea 实例列表（不含 secret）。"""
+    from src.user.gitea_config import login_instances
+    mode, instances = login_instances()
+    return {
+        'mode': mode,
+        'instances': [{'id': x['id'], 'name': x['name'], 'base_url': x['base_url']} for x in instances]
+    }
+
+
+@router.get('/login/gitea')
+def gitea_oauth_login(response: Response, instance: str = ''):
+    """发起 Gitea OAuth 登录，生成防重放 state 与 PKCE 码并在 Cookie 中存储校验状态。"""
+    import base64
+    import hashlib
+    import secrets
+    from urllib.parse import urlencode
+    from src.user.gitea_config import get_login_instance
+    try:
+        config = get_login_instance(instance)
+    except ValueError as exc:
+        raise HTTPException(400, detail={'message': str(exc)}) from exc
+    state = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+    user_db.save_oauth_state(state, 'gitea', {
+        'instance': config['id'], 'base_url': config['base_url'],
+        'client_id': config['client_id'], 'redirect_uri': config['redirect_uri'], 'verifier': verifier,
+    })
+    response.set_cookie('gitea_oauth_' + state, state, httponly=True, secure=COOKIE_SECURE,
+                        samesite='lax', max_age=600, path=_app_base() + _COOKIE_PATH)
+    query = urlencode(dict(client_id=config['client_id'], redirect_uri=config['redirect_uri'],
+                           response_type='code', state=state,
+                           code_challenge=challenge, code_challenge_method='S256'))
+    return {'redirect_url': config['base_url'] + '/login/oauth/authorize?' + query}
+
+
+@router.get('/callback/gitea')
+def gitea_oauth_callback(request: Request, code: str = '', state: str = '', error: str = ''):
+    """Gitea OAuth 回调处理：验证 state，换取 token，拉取个人信息，绑定本地身份并签发 JWT。"""
+    import hmac
+    import re
+    import requests
+    from urllib.parse import urlencode
+    from src.user.gitea_config import get_login_instance
+    from src.user.gitea_identity import resolve_user
+    if not re.fullmatch(r'[A-Za-z0-9_-]{43}', state) or not hmac.compare_digest(
+            request.cookies.get('gitea_oauth_' + state, ''), state):
+        raise HTTPException(400, detail={'message': 'Gitea 登录 state 无效或浏览器不匹配'})
+    saved = user_db.validate_oauth_state(state, 'gitea')
+    if not saved:
+        raise HTTPException(400, detail={'message': 'Gitea 登录已过期或已使用'})
+    try:
+        config = get_login_instance(saved['instance'])
+        if any(config[k] != saved[k] for k in ('base_url', 'client_id', 'redirect_uri')):
+            raise ValueError('Gitea 登录配置已变更，请重新登录')
+    except ValueError as exc:
+        raise HTTPException(400, detail={'message': str(exc)}) from exc
+    if error or not code:
+        return _oauth_error_redirect(request, 'Gitea 授权已取消或未返回授权码')
+    try:
+        token_response = requests.post(config['base_url'] + '/login/oauth/access_token', data={
+            'grant_type': 'authorization_code', 'client_id': config['client_id'],
+            'client_secret': config['client_secret'], 'redirect_uri': saved['redirect_uri'],
+            'code': code, 'code_verifier': saved['verifier'],
+        }, headers={'Accept': 'application/json'}, timeout=15, allow_redirects=False)
+        token_response.raise_for_status()
+        token_data = token_response.json()
+        access_token = token_data.get('access_token', '')
+        if not access_token:
+            raise ValueError('Missing access token')
+        user_response = requests.get(config['base_url'] + '/api/v1/user',
+                                     headers={'Authorization': 'token ' + access_token,
+                                              'Accept': 'application/json'},
+                                     timeout=15, allow_redirects=False)
+        user_response.raise_for_status()
+        profile = user_response.json()
+        if not profile.get('id') or not (profile.get('username') or profile.get('login')):
+            raise ValueError('Missing user identity')
+        # Gitea 的 username 字段在 /api/v1/user 中通常为 username 或 login
+        uname = profile.get('username') or profile.get('login')
+        profile['username'] = uname
+    except Exception:
+        log.warning('Gitea OAuth upstream exchange failed for instance=%s', config['id'])
+        return _oauth_error_redirect(request, 'Gitea 登录失败，请检查应用配置、证书与网络后重试')
+    allowed = config.get('allowed_usernames', [])
+    if allowed and profile['username'] not in allowed:
+        return _oauth_error_redirect(request, '此 Gitea 账号不在该实例的登录白名单内')
+    user = resolve_user(config['base_url'], profile)
+    if not user_db.set_credential(user['id'], 'gitea_login', {
+        'base_url': config['base_url'], 'gitea_user_id': str(profile['id']),
+        'username': profile['username'], 'instance': config['id'],
+    }):
+        raise HTTPException(500, detail={'message': '保存 Gitea 登录身份失败'})
+    account = user_db.get_user_account(user['username']) or {}
+    account['nickname'] = profile.get('full_name') or profile['username']
+    user_db.save_user_account(user['username'], account)
+    from src.api.jwt_utils import create_access_token, create_refresh_token
+    version = user_db.get_token_version(user['id'])
+    jwt_access = create_access_token(user['id'], user['username'], version,
+                                     login_provider='gitea', login_instance=config['id'])
+    jwt_refresh = create_refresh_token(user['id'], user['username'], version,
+                                       login_provider='gitea', login_instance=config['id'])
+    resp = RedirectResponse(_app_base() + '/?' + urlencode({'token': jwt_access}), status_code=302)
+    _set_refresh_cookie(resp, jwt_refresh)
+    resp.delete_cookie('gitea_oauth_' + state, path=_app_base() + _COOKIE_PATH)
+    return resp

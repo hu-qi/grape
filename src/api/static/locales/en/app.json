@@ -43,6 +43,10 @@
   "login": {
     "gitcode_login": "Sign in with GitCode",
     "github_login": "Sign in with GitHub",
+    "gitlab_login": "Sign in with GitLab",
+    "gitlab_select_title": "Select GitLab Instance",
+    "gitea_login": "Sign in with Gitea",
+    "gitea_select_title": "Select Gitea Instance",
     "beta_apply": "Apply for Beta",
     "admin": "Admin Console",
     "pwd_login": "← Sign in with username",

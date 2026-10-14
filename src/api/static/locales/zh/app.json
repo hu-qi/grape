@@ -43,6 +43,10 @@
   "login": {
     "gitcode_login": "使用 GitCode 登录",
     "github_login": "使用 GitHub 登录",
+    "gitlab_login": "使用 GitLab 登录",
+    "gitlab_select_title": "选择 GitLab 登录实例",
+    "gitea_login": "使用 Gitea 登录",
+    "gitea_select_title": "选择 Gitea 登录实例",
     "beta_apply": "申请内测",
     "admin": "管理后台",
     "pwd_login": "← 用户名密码登录",

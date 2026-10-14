@@ -55,7 +55,7 @@ def get_current_user(authorization: str = Header(None)) -> dict:
     mark_user_active(uid)
     login_provider = payload.get("login_provider", "")
     return {"id": uid, "username": username, "token": token, "token_type": TOKEN_TYPE_USER,
-            "login_provider": login_provider}
+            "login_provider": login_provider, "login_instance": payload.get("login_instance", "")}
 
 
 def _extract_api_token(request) -> str:

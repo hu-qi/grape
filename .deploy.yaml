@@ -1,0 +1,8 @@
+# .deploy.yaml - Grape CI/CD 自动部署配置 (参考 devops-bot)
+app: grape               # 镜像名: harbor.gpdi.com/dev/grape:<时间戳>
+namespace: aidev         # 目标命名空间
+branch: main             # 自动触发分支
+container_port: 3000     # 容器内监听端口 (0.0.0.0:3000)
+node_port: 30404         # 对外 NodePort 端口分配 (30400-30403 已占用，30404 分配给 grape)
+expect_body: "Grape"     # 部署后健康检查断言文本
+scan: true               # 启用平台代码合规安全扫描

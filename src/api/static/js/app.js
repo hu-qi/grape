@@ -159,6 +159,7 @@ const app = (() => {
     $('loginView').classList.remove('hid');
     $('sidebar').style.display = 'none';
     $('mainView').style.display = 'none';
+    loadLoginProviders();
   }
 
 function loadAgentTypes() {
@@ -1104,6 +1105,132 @@ function loadAgentTypes() {
     API.get('/auth/login/github').then(d => { if (d.redirect_url) window.location.href = d.redirect_url; }).catch(e => showToast(I18N.t('app.login.oauth_not_configured')));
   }
 
+  function oauthLoginGitlab(instanceId) {
+    var url = '/auth/login/gitlab' + (instanceId ? ('?instance=' + encodeURIComponent(instanceId)) : '');
+    API.get(url).then(d => {
+      if (d.redirect_url) window.location.href = d.redirect_url;
+    }).catch(e => showToast(e?.detail?.message || I18N.t('app.login.oauth_not_configured')));
+  }
+
+  function showGitlabInstanceModal(instances) {
+    var old = document.getElementById('glInstanceModal');
+    if (old) old.remove();
+    var isZh = I18N.getLang() === 'zh';
+    var overlay = document.createElement('div');
+    overlay.id = 'glInstanceModal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
+    var itemsHtml = instances.map(inst => {
+      return '<div class="gl-inst-btn" onclick="app.oauthLoginGitlab(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
+        '<div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</div>' +
+          '<div style="font-size:11px;color:var(--t3,#86868b)">' + inst.base_url + '</div>' +
+        '</div>' +
+        '<span style="font-size:16px;color:var(--a,#3168e0)">→</span>' +
+      '</div>';
+    }).join('');
+
+    overlay.innerHTML =
+      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitlab_select_title') + '</h3>' +
+          '<span onclick="document.getElementById(\'glInstanceModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
+        '</div>' +
+        '<div>' + itemsHtml + '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+  }
+
+  function oauthLoginGitea(instanceId) {
+    var url = '/auth/login/gitea' + (instanceId ? ('?instance=' + encodeURIComponent(instanceId)) : '');
+    API.get(url).then(d => {
+      if (d.redirect_url) window.location.href = d.redirect_url;
+    }).catch(e => showToast(e?.detail?.message || I18N.t('app.login.oauth_not_configured')));
+  }
+
+  function showGiteaInstanceModal(instances) {
+    var old = document.getElementById('gtInstanceModal');
+    if (old) old.remove();
+    var isZh = I18N.getLang() === 'zh';
+    var overlay = document.createElement('div');
+    overlay.id = 'gtInstanceModal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
+    var itemsHtml = instances.map(inst => {
+      return '<div class="gt-inst-btn" onclick="app.oauthLoginGitea(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
+        '<div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</div>' +
+          '<div style="font-size:11px;color:var(--t3,#86868b)">' + inst.base_url + '</div>' +
+        '</div>' +
+        '<span style="font-size:16px;color:var(--a,#3168e0)">→</span>' +
+      '</div>';
+    }).join('');
+
+    overlay.innerHTML =
+      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitea_select_title') + '</h3>' +
+          '<span onclick="document.getElementById(\'gtInstanceModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
+        '</div>' +
+        '<div>' + itemsHtml + '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+  }
+
+  function loadLoginProviders() {
+    var container = document.getElementById('dynamicLoginButtons');
+    if (!container) return;
+    container.innerHTML = '';
+
+    // 加载 GitLab 登录按钮
+    API.get('/auth/gitlab/instances').then(d => {
+      var instances = d.instances || [];
+      var mode = d.mode || 'single';
+      if (instances.length === 0) return;
+
+      var btn = document.createElement('button');
+      btn.className = 'obtn';
+      btn.id = 'gitlabBtn';
+      btn.style.marginTop = '8px';
+      btn.style.background = '#fc6d26'; // GitLab 品牌色
+      btn.innerHTML =
+        '<svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" style="margin-right:8px"><path d="m15.97 9.058-.024-.062L13.882 3.65a.62.62 0 0 0-.256-.277.6.6 0 0 0-.376-.057.61.61 0 0 0-.332.174.62.62 0 0 0-.153.337L11.53 8.01H4.47l-1.235-4.18a.6.6 0 0 0-.153-.337.6.6 0 0 0-.332-.174.6.6 0 0 0-.376.057.62.62 0 0 0-.256.277L.054 8.996l-.024.062a3.865 3.865 0 0 0 1.341 4.394L8 16l6.63-2.548a3.865 3.865 0 0 0 1.34-4.394z"/></svg>' +
+        '<span>' + (mode === 'single' ? ((instances[0] && instances[0].name) || I18N.t('app.login.gitlab_login')) : I18N.t('app.login.gitlab_login')) + '</span>';
+
+      btn.onclick = function () {
+        if (mode === 'single' || instances.length === 1) {
+          oauthLoginGitlab(instances[0].id);
+        } else {
+          showGitlabInstanceModal(instances);
+        }
+      };
+      container.appendChild(btn);
+    }).catch(() => {});
+
+    // 加载 Gitea 登录按钮
+    API.get('/auth/gitea/instances').then(d => {
+      var instances = d.instances || [];
+      var mode = d.mode || 'single';
+      if (instances.length === 0) return;
+
+      var btn = document.createElement('button');
+      btn.className = 'obtn';
+      btn.id = 'giteaBtn';
+      btn.style.marginTop = '8px';
+      btn.style.background = '#609926'; // Gitea 绿色品牌色
+      btn.innerHTML =
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="margin-right:8px"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12c0-5.523-4.477-10-10-10z"/></svg>' +
+        '<span>' + (mode === 'single' ? ((instances[0] && instances[0].name) || I18N.t('app.login.gitea_login')) : I18N.t('app.login.gitea_login')) + '</span>';
+
+      btn.onclick = function () {
+        if (mode === 'single' || instances.length === 1) {
+          oauthLoginGitea(instances[0].id);
+        } else {
+          showGiteaInstanceModal(instances);
+        }
+      };
+      container.appendChild(btn);
+    }).catch(() => {});
+  }
+
   // 内测申请表单
   function openBetaApply() {
     var isZh = I18N.getLang() === 'zh';
@@ -1739,7 +1866,7 @@ function loadAgentTypes() {
     }
   }
 
-  return {nav, search, oauthLogin, oauthLoginGithub, openBetaApply, submitBetaApply, baSelectIdentity, baToggleOther, logout, showToast, openHelp, closeHelp, switchRepo, switchOrg, goToRepos, currentRepo, showLogin, init, loadRepos, initSidebarRepos, loadProfile, getTheme, getThemeMode, setTheme, setThemeMode, toggleGroup, toggleSidebar, showConfirm, closeConfirm, _toggleOrgDropdown, _updateTbOrgName, _toggleLobbyOrgDropdown, _updateLobbyOrgName, _toggleLobbyUserMenu};
+  return {nav, search, oauthLogin, oauthLoginGithub, oauthLoginGitlab, showGitlabInstanceModal, oauthLoginGitea, showGiteaInstanceModal, loadLoginProviders, openBetaApply, submitBetaApply, baSelectIdentity, baToggleOther, logout, showToast, openHelp, closeHelp, switchRepo, switchOrg, goToRepos, currentRepo, showLogin, init, loadRepos, initSidebarRepos, loadProfile, getTheme, getThemeMode, setTheme, setThemeMode, toggleGroup, toggleSidebar, showConfirm, closeConfirm, _toggleOrgDropdown, _updateTbOrgName, _toggleLobbyOrgDropdown, _updateLobbyOrgName, _toggleLobbyUserMenu};
 })();
 
 /** 根据 repo_key 生成 VCS 平台 URL（仓库/Issue 等通用）。 */

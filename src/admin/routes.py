@@ -51,6 +51,12 @@ class ConfigBody(BaseModel):
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = ""
     bot_usernames: list[str] = []
+    gitlab_mode: str | None = None
+    gitlab_default_instance: str | None = None
+    gitlab_instances: list[dict] | None = None
+    gitea_mode: str | None = None
+    gitea_default_instance: str | None = None
+    gitea_instances: list[dict] | None = None
 
 
 class VerifyTokenBody(BaseModel):
@@ -164,7 +170,14 @@ def put_config(body: ConfigBody, admin: dict = Depends(require_admin)):
     # 只保存非空字段（脱敏读、增量写）
     from src.admin.config_store import save_config
     cleaned = {k: v for k, v in payload.items() if v is not None and v != "" and v != []}
-    result = save_config(cleaned)
+    if body.gitlab_instances is not None:
+        cleaned["gitlab_instances"] = body.gitlab_instances
+    if body.gitea_instances is not None:
+        cleaned["gitea_instances"] = body.gitea_instances
+    try:
+        result = save_config(cleaned)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
     return {"message": "配置已保存", "config": result}
 
 

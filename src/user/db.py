@@ -661,6 +661,10 @@ def init_db():
                 db.execute(f"ALTER TABLE user_accounts ADD COLUMN {col} TEXT DEFAULT ''")
             except Exception:
                 pass
+        from src.user.gitlab_identity import DDL as gitlab_identity_ddl
+        db.execute(gitlab_identity_ddl)
+        from src.user.gitea_identity import DDL as gitea_identity_ddl
+        db.execute(gitea_identity_ddl)
         db.execute(_CREDENTIALS_DDL)
         db.execute(_MANAGED_REPOS_DDL)
         db.execute(_OAUTH_STATES_DDL)

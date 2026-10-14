@@ -21,6 +21,12 @@ ALL_FIELDS = [
     "github_oauth_client_secret",
     "github_oauth_redirect_uri",
     "bot_usernames",
+    "gitlab_mode",
+    "gitlab_default_instance",
+    "gitlab_instances",
+    "gitea_mode",
+    "gitea_default_instance",
+    "gitea_instances",
 ]
 
 # 同步到 meta 表的映射：文件 key -> meta key（仅 OAuth 部分走 meta）
@@ -66,6 +72,8 @@ def read_public_config() -> dict:
             _merged[src_key] = _mv
     out = {}
     for field in ALL_FIELDS:
+        if field.startswith("gitlab_") or field.startswith("gitea_"):
+            continue
         val = _merged.get(field, "")
         if isinstance(val, list):
             out[field] = val
@@ -82,6 +90,10 @@ def read_public_config() -> dict:
         "gitcode": bool(get_meta_value("oauth_gitcode_client_id")),
         "github": bool(get_meta_value("oauth_github_client_id")),
     }
+    from src.user.gitlab_config import public_config as gitlab_public_config
+    out.update(gitlab_public_config(data))
+    from src.user.gitea_config import public_config as gitea_public_config
+    out.update(gitea_public_config(data))
     return out
 
 
@@ -92,9 +104,16 @@ def save_config(payload: dict) -> dict:
     返回落盘后的完整配置（脱敏）。
     """
     data = load_config()
+    previous = dict(data)
     for field in ALL_FIELDS:
         if field in payload:
             data[field] = payload[field]
+    if any(key.startswith("gitlab_") for key in payload):
+        from src.user.gitlab_config import validate_config as gitlab_validate_config
+        data.update(gitlab_validate_config(data, previous))
+    if any(key.startswith("gitea_") for key in payload):
+        from src.user.gitea_config import validate_config as gitea_validate_config
+        data.update(gitea_validate_config(data, previous))
     # 落盘：原子写（先写临时文件再 rename）
     tmp = _GBT_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
