@@ -1,0 +1,40 @@
+{
+  "gitea_mode": "multi",
+  "gitea_default_instance": "private_gitea",
+  "gitea_instances": [
+    {
+      "id": "private_gitea",
+      "name": "本地研发 Gitea",
+      "base_url": "http://172.16.145.202:30344",
+      "redirect_uri": "http://172.16.145.202:30404/api/auth/callback/gitea",
+      "auth_mode": "token",
+      "token": "",
+      "client_id": "",
+      "client_secret": ""
+    },
+    {
+      "id": "official_gitea",
+      "name": "Gitea.com",
+      "base_url": "https://gitea.com",
+      "redirect_uri": "http://172.16.145.202:30404/api/auth/callback/gitea",
+      "auth_mode": "token",
+      "token": "",
+      "client_id": "",
+      "client_secret": ""
+    }
+  ],
+  "gitlab_mode": "multi",
+  "gitlab_default_instance": "cndatacom",
+  "gitlab_instances": [
+    {
+      "id": "cndatacom",
+      "name": "DevOps GitLab",
+      "base_url": "https://gitlab.devops.cndatacom.com:18443",
+      "redirect_uri": "http://172.16.145.202:30404/api/auth/callback/gitlab",
+      "auth_mode": "token",
+      "token": "",
+      "client_id": "",
+      "client_secret": ""
+    }
+  ]
+}

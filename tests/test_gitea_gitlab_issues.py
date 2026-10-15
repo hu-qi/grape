@@ -195,3 +195,39 @@ def test_resolve_token_gitcode():
         token, base = _resolve_issue_user_token(_mk_user(), "gitcode")
     assert token == "gtok"
     assert base == ""
+
+
+# ================= seed 引导（镜像重建后实例配置自动恢复） =================
+
+def test_load_config_seed_bootstrap(tmp_path, monkeypatch):
+    """global-bot-token.json 缺失时从 seed 引导初始化实例结构。"""
+    import json as _json
+    import importlib
+    import src.admin.config_store as cs
+    importlib.reload(cs)
+    gbt = tmp_path / "global-bot-token.json"
+    seed = tmp_path / "global-bot-token.seed.json"
+    seed.write_text(_json.dumps({
+        "gitea_mode": "multi", "gitea_default_instance": "priv",
+        "gitea_instances": [{"id": "priv", "name": "P", "base_url": "http://g",
+                             "auth_mode": "token", "token": ""}],
+    }), encoding="utf-8")
+    monkeypatch.setattr(cs, "_GBT_PATH", str(gbt))
+    monkeypatch.setattr(cs, "_SEED_PATH", str(seed))
+    cfg = cs.load_config()
+    assert cfg.get("gitea_default_instance") == "priv"
+    assert [i["id"] for i in cfg.get("gitea_instances", [])] == ["priv"]
+    assert gbt.exists()  # seed 已物化为正式配置文件
+    # 二次读取：直接读已物化文件，不再覆盖
+    cfg2 = cs.load_config()
+    assert cfg2 == cfg
+
+
+def test_load_config_no_seed_returns_empty(tmp_path, monkeypatch):
+    """无 seed 且无配置文件时返回空 dict（原行为不变）。"""
+    import importlib
+    import src.admin.config_store as cs
+    importlib.reload(cs)
+    monkeypatch.setattr(cs, "_GBT_PATH", str(tmp_path / "gbt.json"))
+    monkeypatch.setattr(cs, "_SEED_PATH", str(tmp_path / "seed.json"))
+    assert cs.load_config() == {}

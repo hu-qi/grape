@@ -70,6 +70,7 @@
 - Resolves the 400 error when creating an issue on `gitea:dev/devops-bot` via `POST /api/issues/dev/devops-bot`.
 **Tests**: New unit tests `tests/test_gitea_gitlab_issues.py` (16 passed); regressions `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_issues_api.py`, `test_issue_dedupe.py` (75 passed, 1 pre-existing unrelated failure on clean main); JS checks `test_issue_290_view_issue.js` (7), `test_issue_202` (4), `test_issue_203` (7), `test_issue_12_host_confirm` (6) all passed; `py_compile` and `node --check` clean.
 **Live verification (2026-10-15)**: Commit `89ddc031` deployed to test env (`http://172.16.145.202:30404`, NodePort 30404, namespace `aidev`). Restored Gitea/GitLab instance config via Admin API (image rebuild resets git-ignored `configs/global-bot-token.json`). E2E: Gitea PAT token-login as `private_gitea` → `POST /api/issues/dev/devops-bot` with `repo_key: gitea:dev/devops-bot` → Issue #56 created (`ok: true`); `/api/repos/member` returns `html_url` pointing to `http://172.16.145.202:30344/dev/...` for all 8 Gitea repos. Test PAT revoked after verification.
+**Config persistence**: Added git-tracked `configs/global-bot-token.seed.json` (masked instance structure, no secrets) and a seed bootstrap in `load_config` — on fresh deployments where `global-bot-token.json` is missing, the instance list is auto-initialized from the seed (secrets stay empty for the admin to fill). Fixes the recurring post-rebuild config loss observed during verification.
 **Status**: Completed
 
 

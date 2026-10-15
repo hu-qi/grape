@@ -54,15 +54,15 @@ CREATE TABLE IF NOT EXISTS admin_accounts (
 ```
 
 - 与 `user_accounts` **完全独立**，互不影响（用户侧 OAuth/密码登录保持现状）
-- 默认种子：`admin / admin123`（见 4.2）
+- 默认种子：`admin / Grape@510630`（见 4.2）
 
 ### 4.2 首次初始化与默认账号
 
 - `db_setup.py` 启动阶段：
   - 建 `admin_accounts` 表
-  - 若表为空 → 插入默认账号 `admin`，密码 `admin123`（sha256）
+  - 若表为空 → 插入默认账号 `admin`，密码 `Grape@510630`（sha256）
   - meta 表写入标记：`admin_initialized = 1`、`admin_pwd_initial = 1`（标识仍为默认密码）
-- 密码来源优先级：环境变量 `GRAPE_ADMIN_PASSWORD` > 默认 `admin123`
+- 密码来源优先级：环境变量 `GRAPE_ADMIN_PASSWORD` > 默认 `Grape@510630`
 - README / 部署文档明示默认凭据与改密引导
 
 ### 4.3 admin 认证（JWT）
@@ -147,7 +147,7 @@ https://<host>/admin
 │                                                               │
 │      [        登  录        ]                                  │
 │                                                               │
-│      ⚠ 首次部署默认账号 admin / admin123，登录后将引导修改        │
+│      ⚠ 首次部署默认账号 admin / Grape@510630，登录后将引导修改    │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -228,7 +228,7 @@ https://<host>/admin
 - `require_admin` 必须同时校验 JWT 有效 + `role == admin` + token_version 一致
 - `/api/admin/*` 端点一律要求 admin JWT，**不得**被普通用户 JWT 访问
 - 配置读取接口需脱敏（token/secret 只回显存在性与尾 4 位，回填全量仅在编辑提交时）
-- 默认密码 `admin123` 必须首登引导修改；`admin_pwd_initial=1` 时前端醒目提示
+- 默认密码 `Grape@510630` 必须首登引导修改；`admin_pwd_initial=1` 时前端醒目提示
 - `change-password` 后 `token_version+1`，旧 admin JWT 全部失效
 
 ---

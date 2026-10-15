@@ -1779,10 +1779,10 @@ def _init_skill_featured():
 
 
 def _seed_admin_accounts():
-    """首次部署种子 admin 账号（admin/admin123）+ meta 标记。
+    """首次部署种子 admin 账号（admin/Grape@510630）+ meta 标记。
 
     - 仅当 admin_accounts 为空时插入默认账号 admin；密码优先级：
-      环境变量 GRAPE_ADMIN_PASSWORD > 默认 'admin123'
+      环境变量 GRAPE_ADMIN_PASSWORD > 默认 'Grape@510630'
     - meta 标记：
       admin_initialized  = 1（账号已种子，防重复）
       admin_pwd_initial  = 1（仍为默认密码，前端引导改密；改密后置 0）
@@ -1790,7 +1790,7 @@ def _seed_admin_accounts():
     """
     import hashlib
     from src.user.db import get_meta_value, set_meta_value
-    _default_pwd = os.environ.get("GRAPE_ADMIN_PASSWORD") or "admin123"
+    _default_pwd = os.environ.get("GRAPE_ADMIN_PASSWORD") or "Grape@510630"
     try:
         with db_lock:
             c = db.cursor()
@@ -1800,11 +1800,11 @@ def _seed_admin_accounts():
                 c.execute("INSERT INTO admin_accounts (username, password_hash, is_super, token_version) VALUES (?,?,1,0)",
                           ("admin", _pw_hash))
                 db.commit()
-                _src = "GRAPE_ADMIN_PASSWORD env" if os.environ.get("GRAPE_ADMIN_PASSWORD") else "default admin123"
+                _src = "GRAPE_ADMIN_PASSWORD env" if os.environ.get("GRAPE_ADMIN_PASSWORD") else "default Grape@510630"
                 log.info(f"Seeded default admin account: admin (password from {_src})")
         set_meta_value("admin_initialized", "1")
         if not get_meta_value("admin_pwd_initial"):
-            set_meta_value("admin_pwd_initial", "1" if _default_pwd == "admin123" else "0")
+            set_meta_value("admin_pwd_initial", "1" if _default_pwd == "Grape@510630" else "0")
     except Exception as e:
         log.warning(f"Seed admin account failed: {e}")
 

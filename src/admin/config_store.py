@@ -9,6 +9,7 @@ import os
 from src.config import log, CONFIG_DIR
 
 _GBT_PATH = os.path.join(CONFIG_DIR, "global-bot-token.json")
+_SEED_PATH = os.path.join(CONFIG_DIR, "global-bot-token.seed.json")
 
 # 全字段清单（文件字典的 key）
 ALL_FIELDS = [
@@ -45,7 +46,24 @@ def get_config_path() -> str:
 
 
 def load_config() -> dict:
-    """读取 global-bot-token.json；不存在或损坏返回空 dict。"""
+    """读取 global-bot-token.json；不存在或损坏时尝试从 seed 文件引导初始化。
+
+    seed（global-bot-token.seed.json，git 跟踪）承载 GitLab/Gitea 实例结构，
+    镜像重建清空配置后自动恢复实例列表（密钥留空，由管理员在 UI 补配）。
+    """
+    try:
+        if not os.path.exists(_GBT_PATH) and os.path.exists(_SEED_PATH):
+            with open(_SEED_PATH, "r", encoding="utf-8") as f:
+                seed = json.load(f)
+            if isinstance(seed, dict):
+                os.makedirs(os.path.dirname(_GBT_PATH), exist_ok=True)
+                tmp = _GBT_PATH + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(seed, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, _GBT_PATH)
+                log.info("admin config_store: initialized from seed file (fresh deployment)")
+    except Exception as e:
+        log.warning(f"admin config_store: seed bootstrap failed: {e}")
     try:
         if os.path.exists(_GBT_PATH):
             with open(_GBT_PATH, "r", encoding="utf-8") as f:
