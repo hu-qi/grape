@@ -37,5 +37,6 @@
 **Success Criteria**:
 - Configured instances (internal GitLab `https://gitlab.devops.cndatacom.com`, private Gitea `http://172.16.145.202:30344`, official Gitea `https://gitea.com`) correctly display on login page.
 - Direct Token login succeeds for internal GitLab (`9527` / 胡琦) and private Gitea (`dev`).
-**Status**: In Progress
+**Status**: Completed
+
 
