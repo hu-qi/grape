@@ -206,6 +206,7 @@ def _filter_repos(user_id: int, repos: list[dict], org_id: int = 0) -> list[dict
             "is_joined": in_managed,
             "is_hosted": hosted,
             "created_at": r.get("created_at", "") or "",
+            "html_url": r.get("html_url", "") or "",
         })
     return result
 
@@ -1052,6 +1053,7 @@ def list_managed_repos(user: dict = Depends(require_org_member)):
         "branch": "main",
         "status": "Active" if r["is_admin"] else "Joined",
         "has_bot_token": bool(r.get("bot_gitcode_token", "")),
+        "html_url": r.get("html_url", "") or "",
     } for r in repos]}
 
 

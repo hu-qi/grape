@@ -61,5 +61,15 @@
 **Tests**: Regression test suite `tests/test_gitlab_login.py`, `tests/test_gitea_login.py`, `tests/test_gitea_gitlab_repos.py` (40 passed).
 **Status**: Completed
 
+## Stage 9: Self-hosted Gitea/GitLab external links and Issue creation
+**Goal**: Fix the three self-hosted Gitea defects — `#repos` external links jumping to `gitea.com`, `#dash` top project link jumping to `gitcode.com`, and issue creation returning 400 (`GitCode API Token 未配置`) — so Gitea and GitLab instances work end to end for repository browsing and requirement creation.
+**Success Criteria**:
+- Data layer: `user_repos` cache persists `html_url` (real instance web URL) written by `fetch_gitea_repos_with_role` / `fetch_gitlab_repos_with_role`; repo list and managed endpoints pass through `html_url` and `repo_key`.
+- Frontend: `repos.js` `_repoUrl` and `app.js` `_vcsUrl` resolve real instance base URLs (captured from `/auth/gitea/instances` / `/auth/gitlab/instances` and current repo `htmlUrl`) instead of hardcoding `gitea.com` / `gitcode.com`; `#dash` top project link and platform icons support `gitea:` / `gitlab:` prefixes; `selectRepo` / `switchRepo` persist `htmlUrl` in `currentRepo` session state; `_openPRDetail` reuses the unified `_vcsUrl`.
+- Backend: `issues_center.py` adds `_post_gitea_issue`, `_post_gitlab_issue`, `_patch_gitea_issue_body`, `_patch_gitlab_issue_body`, `_gitea_issue_base_url`, `_gitlab_issue_base_url`, and `_resolve_issue_user_token` (personal PAT → Admin instance token fallback, platform-specific 400 messages); `create_task_via_issue`, `create_standard_task` and `_find_open_issue_by_title` dispatch by `repo_key` prefix (`github:` / `gitea:` / `gitlab:` / `gitcode:`); GitLab project paths are URL-encoded and issues use `description` (not `body`); multi-task-mode marker PATCH covers Gitea/GitLab.
+- Resolves the 400 error when creating an issue on `gitea:dev/devops-bot` via `POST /api/issues/dev/devops-bot`.
+**Tests**: New unit tests `tests/test_gitea_gitlab_issues.py` (16 passed); regressions `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_issues_api.py`, `test_issue_dedupe.py` (75 passed, 1 pre-existing unrelated failure on clean main); JS checks `test_issue_290_view_issue.js` (7), `test_issue_202` (4), `test_issue_203` (7), `test_issue_12_host_confirm` (6) all passed; `py_compile` and `node --check` clean.
+**Status**: Completed
+
 
 

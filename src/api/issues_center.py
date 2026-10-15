@@ -1042,7 +1042,7 @@ def resume_issue_task(repo_key: str, issue_number: int):
 
 
 def _find_open_issue_by_title(api_token: str, owner: str, repo: str, title: str,
-                             provider: str = "gitcode") -> int | None:
+                             provider: str = "gitcode", base_url: str = "") -> int | None:
     """幂等查找：同仓库已存在同名 open Issue → 返回其 number（避免重复建 issue）。"""
     if provider == "github":
         from src.user.repo_manager import _github_req
@@ -1060,6 +1060,46 @@ def _find_open_issue_by_title(api_token: str, owner: str, repo: str, title: str,
                 n = it.get("number")
                 if n:
                     return int(n)
+        return None
+    if provider == "gitea":
+        from src.user.repo_manager import _gitea_req
+        base = (base_url or _gitea_issue_base_url()).rstrip("/")
+        try:
+            data = _gitea_req("GET", f"{base}/api/v1/repos/{owner}/{repo}/issues?state=open&limit=50&page=1",
+                              api_token)
+        except Exception:
+            return None
+        items = data if isinstance(data, list) else []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("title") or "").strip() == title.strip():
+                st = str(it.get("state") or "").lower()
+                if st in ("open", "opened"):
+                    n = it.get("number") or it.get("iid") or it.get("id")
+                    if n:
+                        return int(n)
+        return None
+    if provider == "gitlab":
+        from src.user.repo_manager import _gitlab_req
+        from urllib.parse import quote as _q
+        base = (base_url or _gitlab_issue_base_url()).rstrip("/")
+        project_path = _q(f"{owner}/{repo}", safe="")
+        try:
+            data = _gitlab_req("GET", f"{base}/api/v4/projects/{project_path}/issues?state=opened&per_page=50",
+                               api_token)
+        except Exception:
+            return None
+        items = data if isinstance(data, list) else []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("title") or "").strip() == title.strip():
+                st = str(it.get("state") or "").lower()
+                if st in ("opened", "open"):
+                    n = it.get("iid") or it.get("number") or it.get("id")
+                    if n:
+                        return int(n)
         return None
     # GitCode
     from src.user.repo_manager import _req
@@ -1187,6 +1227,153 @@ def _patch_github_issue_body(api_token: str, owner: str, repo: str, issue_num: i
                        api_token, {"body": body_text})
 
 
+def _gitea_issue_base_url() -> str:
+    """Gitea Issue API base_url：取 Admin 配置的默认实例，兜底官方 gitea.com。"""
+    try:
+        from src.admin.config_store import load_config
+        cfg = load_config()
+        inst_key = cfg.get('gitea_default_instance', '')
+        for inst in cfg.get('gitea_instances', []):
+            if inst.get('id') == inst_key and inst.get('base_url'):
+                return inst['base_url']
+        for inst in cfg.get('gitea_instances', []):
+            if inst.get('base_url'):
+                return inst['base_url']
+    except Exception:
+        pass
+    return "https://gitea.com"
+
+
+def _gitlab_issue_base_url() -> str:
+    """GitLab Issue API base_url：取 Admin 配置的默认实例，兜底官方 gitlab.com。"""
+    try:
+        from src.admin.config_store import load_config
+        cfg = load_config()
+        inst_key = cfg.get('gitlab_default_instance', '')
+        for inst in cfg.get('gitlab_instances', []):
+            if inst.get('id') == inst_key and inst.get('base_url'):
+                return inst['base_url']
+        for inst in cfg.get('gitlab_instances', []):
+            if inst.get('base_url'):
+                return inst['base_url']
+    except Exception:
+        pass
+    return "https://gitlab.com"
+
+
+def _post_gitea_issue(api_token: str, owner: str, repo: str, title: str,
+                      body_text: str = "", assignee: str = "", base_url: str = "") -> dict:
+    """创建 Gitea Issue（POST /repos/{owner}/{repo}/issues，JSON body + token 头）。
+
+    assignee 默认不传：grape 平台用户名与 Gitea 用户名不一定一致，传错会 422。
+    """
+    from src.user.repo_manager import _gitea_req
+    base = (base_url or _gitea_issue_base_url()).rstrip("/")
+    body = {"title": title}
+    if body_text:
+        body["body"] = body_text
+    return _gitea_req("POST", f"{base}/api/v1/repos/{owner}/{repo}/issues", api_token, body)
+
+
+def _post_gitlab_issue(api_token: str, owner: str, repo: str, title: str,
+                       body_text: str = "", assignee: str = "", base_url: str = "") -> dict:
+    """创建 GitLab Issue（POST /projects/{urlencoded path}/issues，JSON body + PRIVATE-TOKEN 头）。
+
+    GitLab assignee 需要 assignee_ids（用户数字 ID），此处不传避免 400。
+    """
+    from src.user.repo_manager import _gitlab_req
+    from urllib.parse import quote as _q
+    base = (base_url or _gitlab_issue_base_url()).rstrip("/")
+    path = _q(f"{owner}/{repo}", safe="")
+    body = {"title": title}
+    if body_text:
+        body["description"] = body_text
+    return _gitlab_req("POST", f"{base}/api/v4/projects/{path}/issues", api_token, body)
+
+
+def _patch_gitea_issue_body(api_token: str, owner: str, repo: str, issue_num: int, body_text: str,
+                            base_url: str = ""):
+    """PATCH Gitea Issue body（追加多任务模式标记）。"""
+    from src.user.repo_manager import _gitea_req
+    base = (base_url or _gitea_issue_base_url()).rstrip("/")
+    return _gitea_req("PATCH", f"{base}/api/v1/repos/{owner}/{repo}/issues/{issue_num}",
+                      api_token, {"body": body_text})
+
+
+def _patch_gitlab_issue_body(api_token: str, owner: str, repo: str, issue_num: int, body_text: str,
+                             base_url: str = ""):
+    """PUT GitLab Issue description（追加多任务模式标记；GitLab 用 PUT 而非 PATCH）。"""
+    from src.user.repo_manager import _gitlab_req
+    from urllib.parse import quote as _q
+    base = (base_url or _gitlab_issue_base_url()).rstrip("/")
+    path = _q(f"{owner}/{repo}", safe="")
+    return _gitlab_req("PUT", f"{base}/api/v4/projects/{path}/issues/{issue_num}",
+                       api_token, {"description": body_text})
+
+
+def _resolve_issue_user_token(user: dict, provider: str) -> tuple[str, str]:
+    """按 provider 解析当前登录用户可用的 Issue API token 与实例 base_url。
+
+    返回 (token, base_url)；github 返回 (token, "")，gitcode 返回 (token, "")。
+    用户未绑定个人 token 时回退 Admin 配置的实例 token（与 repos.py 同一兜底口径）。
+    无可用 token 抛 400，消息按平台区分。
+    """
+    if provider == "gitea":
+        from src.api.deps import get_user_gitea_token, get_user_gitea_credential
+        _uid = user.get("id") or user["username"]
+        inst_id = user.get("login_instance", "")
+        token = get_user_gitea_token(_uid, instance_id=inst_id) or ""
+        cred = get_user_gitea_credential(_uid, instance_id=inst_id)
+        base_url = (cred.get("base_url", "") or "") if cred else ""
+        if not token or not base_url:
+            from src.admin.config_store import load_config
+            cfg = load_config()
+            inst_key = inst_id or cfg.get('gitea_default_instance', '')
+            for inst in cfg.get('gitea_instances', []):
+                if inst.get('id') == inst_key:
+                    if not token and inst.get('token'):
+                        token = inst['token']
+                    if not base_url and inst.get('base_url'):
+                        base_url = inst['base_url']
+                    break
+        if not token:
+            raise HTTPException(status_code=400, detail={"code": 400, "message": "Gitea API Token 未配置"})
+        return token, base_url
+    if provider == "gitlab":
+        from src.api.deps import get_user_gitlab_token, get_user_gitlab_credential
+        _uid = user.get("id") or user["username"]
+        inst_id = user.get("login_instance", "")
+        token = get_user_gitlab_token(_uid, instance_id=inst_id) or ""
+        cred = get_user_gitlab_credential(_uid, instance_id=inst_id)
+        base_url = (cred.get("base_url", "") or "") if cred else ""
+        if not token or not base_url:
+            from src.admin.config_store import load_config
+            cfg = load_config()
+            inst_key = inst_id or cfg.get('gitlab_default_instance', '')
+            for inst in cfg.get('gitlab_instances', []):
+                if inst.get('id') == inst_key:
+                    if not token and inst.get('token'):
+                        token = inst['token']
+                    if not base_url and inst.get('base_url'):
+                        base_url = inst['base_url']
+                    break
+        if not token:
+            raise HTTPException(status_code=400, detail={"code": 400, "message": "GitLab API Token 未配置"})
+        return token, base_url
+    if provider == "github":
+        from src.user.db import get_user_github_token
+        token = get_user_github_token(user["id"]) or ""
+        if not token:
+            raise HTTPException(status_code=400, detail={"code": 400, "message": "GitHub API Token 未配置"})
+        return token, ""
+    # gitcode（默认）
+    from src.api.deps import get_user_token_with_refresh
+    token = get_user_token_with_refresh(user["username"], user_id=user["id"])
+    if not token:
+        raise HTTPException(status_code=400, detail={"code": 400, "message": "GitCode API Token 未配置"})
+    return token, ""
+
+
 def create_standard_task(repo_key: str, title: str, description: str,
                          bot_token: str, assignee: str = "", labels=None) -> dict:
     """真实 GitCode Issue 创建 + 标准任务建档（onboarding 模块调用，与手动创建任务同一原子路径）。
@@ -1206,7 +1393,8 @@ def create_standard_task(repo_key: str, title: str, description: str,
         return {"ok": False, "code": 400, "message": "bot token 缺失"}
     if not assignee:
         assignee = owner or ""
-    issue_num = _find_open_issue_by_title(bot_token, owner, rname, title.strip())
+    issue_num = _find_open_issue_by_title(bot_token, owner, rname, title.strip(),
+                                          provider=_provider)
     created = False
     if issue_num is not None:
         # 已有同标题 open Issue → 直接建档（幂等：不再重复创建 Issue）
@@ -1214,6 +1402,12 @@ def create_standard_task(repo_key: str, title: str, description: str,
     else:
         if _provider == "github":
             resp = _post_github_issue(bot_token, owner, rname, title.strip(),
+                                      (description or "").strip(), assignee=assignee)
+        elif _provider == "gitea":
+            resp = _post_gitea_issue(bot_token, owner, rname, title.strip(),
+                                     (description or "").strip(), assignee=assignee)
+        elif _provider == "gitlab":
+            resp = _post_gitlab_issue(bot_token, owner, rname, title.strip(),
                                       (description or "").strip(), assignee=assignee)
         else:
             resp = _post_gitcode_issue(bot_token, owner, rname, title.strip(),
@@ -1249,8 +1443,10 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
         raise HTTPException(status_code=400, detail={"code": 400, "message": "任务描述必填"})
     repo_key = to_repo_key(body.repo_key)
     owner, rname = split_owner_repo(repo_key)
-    # provider 分流：github: → GitHub API，gitcode: → GitCode API
-    _is_github = repo_key.startswith("github:")
+    from src.repo_key import parse_repo_key as _parse_rk
+    _provider, _, _ = _parse_rk(repo_key)
+    # provider 分流：github: / gitea: / gitlab: / gitcode:
+    _is_github = _provider == "github"
     # _preauth_token: autopilot 等内部调用（auth_type=api_key/internal）预注入 bot token
     # JWT 登录用户的 token 是 session JWT 不是 GitCode API token，不能走此路径
     # grape_ 前缀的是用户级 API Key（CLI 用户），同样不是 GitCode token，不能走此路径
@@ -1261,20 +1457,13 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
             _preauth_token = _token_val
     if _preauth_token:
         api_token = _preauth_token
-    elif _is_github:
-        from src.user.db import get_user_github_token
-        api_token = get_user_github_token(user["id"]) or ""
-        if not api_token:
-            raise HTTPException(status_code=400, detail={"code": 400, "message": "GitHub API Token 未配置"})
+        issue_base_url = ""
     else:
-        from src.api.deps import get_user_token_with_refresh
-        api_token = get_user_token_with_refresh(user["username"], user_id=user["id"])
-        if not api_token:
-            raise HTTPException(status_code=400, detail={"code": 400, "message": "GitCode API Token 未配置"})
+        api_token, issue_base_url = _resolve_issue_user_token(user, _provider)
     assignee = (body.assignee or "").strip() or user["username"]
     # 1) 幂等：同 title open issue 已存在 → 提示用户任务已存在
     issue_num = _find_open_issue_by_title(api_token, owner, rname, body.title.strip(),
-                                          provider="github" if _is_github else "gitcode")
+                                          provider=_provider, base_url=issue_base_url)
     created = False
     if issue_num is not None:
         raise HTTPException(status_code=409, detail={"code": 409,
@@ -1297,6 +1486,12 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
         if _is_github:
             resp = _post_github_issue(api_token, owner, rname, body.title.strip(),
                                       _desc_with_attach, assignee=assignee)
+        elif _provider == "gitea":
+            resp = _post_gitea_issue(api_token, owner, rname, body.title.strip(),
+                                     _desc_with_attach, base_url=issue_base_url)
+        elif _provider == "gitlab":
+            resp = _post_gitlab_issue(api_token, owner, rname, body.title.strip(),
+                                      _desc_with_attach, base_url=issue_base_url)
         elif _preauth_token:
             resp = _post_gitcode_issue(api_token, owner, rname, body.title.strip(),
                                        _desc_with_attach, assignee=assignee)
@@ -1382,14 +1577,21 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
             log.warning(f"create_task: set_subtask_mode failed: {_e}")
         try:
             _marker = "\n\n---\n[multi-task-mode] 本任务启用多任务模式，将由 Issue Agent 自动判断是否拆分为子任务执行。"
+            _orig_desc = (body.description or "")
             if _is_github:
                 # GitHub: 直接用用户 github_api_token
                 from src.user.db import get_user_github_token
                 _gh_token = get_user_github_token(user["id"]) or ""
                 if _gh_token:
-                    _patch_github_issue_body(_gh_token, owner, rname, issue_num, (body.description or "") + _marker)
+                    _patch_github_issue_body(_gh_token, owner, rname, issue_num, _orig_desc + _marker)
+            elif _provider == "gitea":
+                _patch_gitea_issue_body(api_token, owner, rname, issue_num, _orig_desc + _marker,
+                                        base_url=issue_base_url)
+            elif _provider == "gitlab":
+                _patch_gitlab_issue_body(api_token, owner, rname, issue_num, _orig_desc + _marker,
+                                         base_url=issue_base_url)
             elif _preauth_token:
-                _patch_issue_body(api_token, owner, rname, issue_num, (body.description or "") + _marker)
+                _patch_issue_body(api_token, owner, rname, issue_num, _orig_desc + _marker)
             else:
                 # Issue #52: 401 时自动刷新 token 重试
                 _gitcode_api_with_refresh(user, _patch_issue_body, owner, rname, issue_num, (body.description or "") + _marker)

@@ -450,6 +450,7 @@ CREATE TABLE IF NOT EXISTS user_repos (
     is_join INTEGER DEFAULT 0,            -- 该用户是否已「加入」该仓库（用户级状态）
     created_at TEXT DEFAULT '',           -- GitCode 仓库创建时间（同级内按新建时间倒序用）
     synced_at TEXT DEFAULT (datetime('now')),
+    html_url TEXT DEFAULT '',
     PRIMARY KEY (user_id, repo_key)
 )
 """
@@ -539,6 +540,12 @@ def _migrate_repo_key_tables():
             if "created_at" not in ur_cols2:
                 try:
                     c.execute("ALTER TABLE user_repos ADD COLUMN created_at TEXT DEFAULT ''")
+                    db.commit()
+                except Exception:
+                    pass
+            if "html_url" not in ur_cols2:
+                try:
+                    c.execute("ALTER TABLE user_repos ADD COLUMN html_url TEXT DEFAULT ''")
                     db.commit()
                 except Exception:
                     pass
@@ -1329,7 +1336,7 @@ def get_managed_repos(user_id: int, org_id: int = 0, personal_org: bool = False)
                 c.execute(
                     "SELECT m.repo_key, m.repo_owner, m.repo_name, m.full_name, m.webhook_id, "
                     "m.bot_gitcode_token, m.gitcode_webhook_token, m.bot_username, m.created_at, "
-                    "COALESCE(u.is_join,0), COALESCE(u.is_admin,0) "
+                    "COALESCE(u.is_join,0), COALESCE(u.is_admin,0), COALESCE(u.html_url,'') "
                     "FROM managed_repos m "
                     "LEFT JOIN user_repos u ON u.repo_key=m.repo_key AND u.user_id=? "
                     "WHERE u.repo_key IS NOT NULL "
@@ -1339,7 +1346,7 @@ def get_managed_repos(user_id: int, org_id: int = 0, personal_org: bool = False)
                 c.execute(
                     "SELECT m.repo_key, m.repo_owner, m.repo_name, m.full_name, m.webhook_id, "
                     "m.bot_gitcode_token, m.gitcode_webhook_token, m.bot_username, m.created_at, "
-                    "COALESCE(u.is_join,0), COALESCE(u.is_admin,0) "
+                    "COALESCE(u.is_join,0), COALESCE(u.is_admin,0), COALESCE(u.html_url,'') "
                     "FROM managed_repos m "
                     "LEFT JOIN user_repos u ON u.repo_key=m.repo_key AND u.user_id=? "
                     "WHERE u.repo_key IS NOT NULL AND m.org_id=? "
@@ -1348,7 +1355,7 @@ def get_managed_repos(user_id: int, org_id: int = 0, personal_org: bool = False)
                 c.execute(
                     "SELECT m.repo_key, m.repo_owner, m.repo_name, m.full_name, m.webhook_id, "
                     "m.bot_gitcode_token, m.gitcode_webhook_token, m.bot_username, m.created_at, "
-                    "COALESCE(u.is_join,0), COALESCE(u.is_admin,0) "
+                    "COALESCE(u.is_join,0), COALESCE(u.is_admin,0), COALESCE(u.html_url,'') "
                     "FROM managed_repos m "
                     "LEFT JOIN user_repos u ON u.repo_key=m.repo_key AND u.user_id=? "
                     "WHERE u.repo_key IS NOT NULL "
@@ -1357,7 +1364,7 @@ def get_managed_repos(user_id: int, org_id: int = 0, personal_org: bool = False)
             log.warning(f"get_managed_repos join failed: {e}")
             c.execute(
                 "SELECT repo_key, repo_owner, repo_name, full_name, webhook_id, "
-                "bot_gitcode_token, gitcode_webhook_token, bot_username, created_at, 0, 0 "
+                "bot_gitcode_token, gitcode_webhook_token, bot_username, created_at, 0, 0, '' "
                 "FROM managed_repos ORDER BY full_name")
         rows = c.fetchall()
         # autocommit=False 下 SELECT 会打开事务，同线程连接后续 SELECT 看到旧快照。
@@ -1369,6 +1376,7 @@ def get_managed_repos(user_id: int, org_id: int = 0, personal_org: bool = False)
             "bot_gitcode_token": r[5] or "", "gitcode_webhook_token": r[6] or "",
             "bot_username": r[7] or "", "created_at": r[8],
             "is_join": bool(r[9]), "is_admin": bool(r[10]),
+            "html_url": r[11] or "",
         } for r in rows]
 
 
@@ -2017,10 +2025,10 @@ def save_user_repos(user_id: int, repos: list[dict]):
             repo_key = r.get("repo_key", "") or to_repo_key(full_name)
             is_join = 1 if repo_key in joined_keys else 0
             c.execute(
-                "INSERT OR REPLACE INTO user_repos (user_id, repo_key, owner, name, description, role, is_admin, is_join, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO user_repos (user_id, repo_key, owner, name, description, role, is_admin, is_join, created_at, html_url) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (user_id, repo_key, r.get("owner", ""), r.get("name", ""),
                  r.get("description", ""), r.get("role", ""), 1 if r.get("is_admin") else 0, is_join,
-                 r.get("created_at", "") or "")
+                 r.get("created_at", "") or "", r.get("html_url", "") or "")
             )
         db.commit()
 
@@ -2034,11 +2042,11 @@ def get_user_repos(user_id: int, org_id: int = 0) -> list[dict]:
     from src.repo_key import from_repo_key
     with db_lock:
         c = db.cursor()
-        c.execute("SELECT repo_key, owner, name, description, role, is_admin, is_join, created_at FROM user_repos WHERE user_id=? ORDER BY repo_key", (user_id,))
+        c.execute("SELECT repo_key, owner, name, description, role, is_admin, is_join, created_at, html_url FROM user_repos WHERE user_id=? ORDER BY repo_key", (user_id,))
         return [
             {"repo_key": r[0], "full_name": from_repo_key(r[0]), "owner": r[1], "name": r[2],
              "description": r[3], "role": r[4], "is_admin": bool(r[5]), "is_join": bool(r[6]),
-             "created_at": r[7] or ""}
+             "created_at": r[7] or "", "html_url": r[8] or ""}
             for r in c.fetchall()
         ]
 

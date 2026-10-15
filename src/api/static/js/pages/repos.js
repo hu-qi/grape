@@ -59,7 +59,7 @@ function switchSidebarTab(tab) {
         try { saved = app.currentRepo(); } catch (e) { saved = null; }
         const matched = saved && hosted.find(r => r.full_name === saved.fullName);
         const target = matched || hosted[0];
-        selectRepo(target.full_name, target.owner, target.name, target.repo_key);
+        selectRepo(target.full_name, target.owner, target.name, target.repo_key, target.html_url);
       } else {
         _renderWorkspaceEmpty();
       }
@@ -248,8 +248,14 @@ function _repoUrl(r) {
   var fn = r.full_name || (r.owner ? r.owner + '/' + r.name : '');
   if (r.html_url) return r.html_url;
   if (rk.indexOf('github:') === 0) return 'https://github.com/' + fn;
-  if (rk.indexOf('gitea:') === 0) return 'https://gitea.com/' + fn;
-  if (rk.indexOf('gitlab:') === 0) return 'https://gitlab.com/' + fn;
+  if (rk.indexOf('gitea:') === 0) {
+    var gtHost = (window._giteaBaseUrl || 'https://gitea.com').replace(/\/+$/, '');
+    return gtHost + '/' + fn;
+  }
+  if (rk.indexOf('gitlab:') === 0) {
+    var glHost = (window._gitlabBaseUrl || 'https://gitlab.com').replace(/\/+$/, '');
+    return glHost + '/' + fn;
+  }
   return 'https://gitcode.com/' + fn;
 }
 function _repoPlatform(r) {
@@ -281,7 +287,7 @@ function _buildProjectCard(r) {
 
   var actionHtml;
   if (r.is_hosted) {
-    actionHtml = '<button class="project-card-btn project-card-btn-outline" onclick="event.stopPropagation();selectRepo(\'' + r.full_name + '\',\'' + r.owner + '\',\'' + r.name + '\',\'' + (r.repo_key || '') + '\')">' + I18N.t('repos.card.enter_project') + '→</button>';
+    actionHtml = '<button class="project-card-btn project-card-btn-outline" onclick="event.stopPropagation();selectRepo(\'' + r.full_name + '\',\'' + r.owner + '\',\'' + r.name + '\',\'' + (r.repo_key || '') + '\',\'' + (r.html_url || '') + '\')">' + I18N.t('repos.card.enter_project') + '→</button>';
   } else if (r.can_host) {
     actionHtml = '<button class="project-card-btn project-card-btn-outline" onclick="event.stopPropagation();hostAndSelect(\'' + r.full_name + '\',\'' + r.owner + '\',\'' + r.name + '\',\'' + (r.repo_key || '') + '\',event)">' + I18N.t('repos.card.join_and_host') + '→</button>';
   } else {
@@ -353,7 +359,7 @@ function renderRepos() {
         const platformName = _repoPlatform(r);
         html += `<div class="repo-item" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b)">
           ${platformIcon} <span class="ts t3">${platformName}</span>
-          <span class="tg tg-c" style="font-size:11px;padding:3px 8px;cursor:pointer" onclick="selectRepo('${r.full_name}','${r.owner}','${r.name}','${r.repo_key || ''}')">${r.full_name}</span>
+          <span class="tg tg-c" style="font-size:11px;padding:3px 8px;cursor:pointer" onclick="selectRepo('${r.full_name}','${r.owner}','${r.name}','${r.repo_key || ''}','${r.html_url || ''}')">${r.full_name}</span>
           <span class="ts t2">${r.role}</span>
           <span class="ts t3">${r.is_hosted ? 'Webhook OK' : ''} · ★ ${r.name}</span>
           <span class="tg ${statusClass}" style="margin-left:auto">${statusText}</span>
@@ -495,8 +501,8 @@ function hostNoPermission() {
   app.showToast(I18N.t('repos.card.no_permission_host'));
 }
 
-function selectRepo(fullName, owner, name, repoKey) {
-  sessionStorage.setItem('currentRepo', JSON.stringify({fullName, owner, name, repoKey: repoKey || ''}));
+function selectRepo(fullName, owner, name, repoKey, htmlUrl) {
+  sessionStorage.setItem('currentRepo', JSON.stringify({fullName, owner, name, repoKey: repoKey || '', htmlUrl: htmlUrl || ''}));
   const sidebar = document.getElementById('sidebar');
   const mainView = document.getElementById('mainView');
   const tb = document.getElementById('tb');

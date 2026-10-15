@@ -385,9 +385,8 @@ window._openPRDetail = function(t) {
   const el = document.getElementById('pageContent');
   if (!el) return;
   var _backLabel = I18N.t('tasks.back_to_board')||'返回看板';
-  var _vcsBase = t.repo_key.startsWith('github:') ? 'github.com' : 'gitcode.com';
   var _vcsPath = '/pull/' + t.issue_number;
-  var _vcsUrl = 'https://' + _vcsBase + '/' + t.repo_key.replace(/^(github|gitcode):/, '') + _vcsPath;
+  var _vcsUrlTarget = (typeof _vcsUrl === 'function') ? _vcsUrl(t.repo_key, _vcsPath) : ('https://gitcode.com/' + (t.repo_key || '').replace(/^(github|gitea|gitlab|gitcode):/, '') + _vcsPath);
   var _statusColor = t.status === 'completed' ? '#34c759' : t.status === 'cancelled' ? '#ff3b30' : t.status === 'processing' ? '#3b82f6' : '#86868b';
   var _statusText = t.status === 'completed' ? '审查完成' : t.status === 'cancelled' ? '审查失败' : t.status === 'processing' ? '审查中' : '待处理';
   var _cardStyle = 'background:rgba(0,0,0,.02);border-radius:14px;border:0.5px solid var(--b,#e8e8ed);padding:14px 16px;margin-bottom:12px';
@@ -403,14 +402,14 @@ window._openPRDetail = function(t) {
       <h1 style="margin:0;font-size:16px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.title || ''}</h1>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;padding-bottom:10px;border-bottom:1px solid var(--b);margin-bottom:12px">
-      <button class="tsk-btn tsk-btn-ghost" style="padding:4px 10px;border-radius:8px;font-size:11px" onclick="window.open('${_vcsUrl}','_blank')">查看 PR ↗</button>
+      <button class="tsk-btn tsk-btn-ghost" style="padding:4px 10px;border-radius:8px;font-size:11px" onclick="window.open('${_vcsUrlTarget}','_blank')">查看 PR ↗</button>
       <button class="tsk-btn tsk-btn-ghost" style="padding:4px 10px;border-radius:8px;font-size:11px" onclick="app.nav('event','${t.pr_seq}')">事件详情</button>
       <button class="tsk-btn tsk-btn-primary" style="padding:4px 10px;border-radius:8px;font-size:11px" onclick="openPrInterveneModal()">介入解决</button>
     </div>
     <div style="${_cardStyle}">
       <div style="${_cardTitle}">PR 审查</div>
       <div style="${_rowStyle}"><span style="${_labelStyle}">状态</span><b style="${_valueStyle};color:${_statusColor}">${_statusText}</b></div>
-      <div style="${_rowStyle}"><span style="${_labelStyle}">PR</span><b style="${_valueStyle}"><a href="${_vcsUrl}" target="_blank" rel="noopener" style="color:var(--a,#0071e3);text-decoration:none;font-weight:500">#${t.issue_number} ↗</a></b></div>
+      <div style="${_rowStyle}"><span style="${_labelStyle}">PR</span><b style="${_valueStyle}"><a href="${_vcsUrlTarget}" target="_blank" rel="noopener" style="color:var(--a,#0071e3);text-decoration:none;font-weight:500">#${t.issue_number} ↗</a></b></div>
       <div style="${_rowStyle}"><span style="${_labelStyle}">仓库</span><b style="${_valueStyle}">${t.repo_key.replace(/^(github|gitcode):/, '')}</b></div>
       <div style="${_rowStyle}"><span style="${_labelStyle}">触发者</span><b style="${_valueStyle}">${t.assignee || '—'}</b></div>
       <div style="${_rowStyle}"><span style="${_labelStyle}">触发时间</span><b style="${_valueStyle}">${fmtLocalTime(t.created_at).substring(0,16)}</b></div>
