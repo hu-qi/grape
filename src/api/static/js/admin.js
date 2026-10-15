@@ -104,6 +104,7 @@
         '<div class="f-row"><label style="width:140px">Client Secret</label><input class="gl_client_secret" type="password" placeholder="' + (inst.client_secret_present ? '● 已配置（留空保持不变）' : 'GitLab OAuth Secret') + '"></div>',
         '<div class="f-row"><label style="width:140px">Redirect URI</label><input class="gl_redirect_uri" value="' + (inst.redirect_uri || '') + '" placeholder="如 https://your-domain/api/auth/callback/gitlab"></div>',
         '<div class="f-row"><label style="width:140px">启用登录</label><input type="checkbox" class="gl_enabled" ' + (inst.enabled !== false ? 'checked' : '') + ' style="width:auto"></div>',
+        '<div class="f-row"><label style="width:140px">Token 登录</label><input type="checkbox" class="gl_allow_token" ' + (inst.allow_token_login ? 'checked' : '') + ' style="width:auto" title="开启后无需 OAuth 应用，用户可直接用 GitLab 个人访问令牌登录"></div>',
         '<div class="f-row"><label style="width:140px">用户白名单</label><input class="gl_allowed_usernames" value="' + ((inst.allowed_usernames || []).join(', ')) + '" placeholder="逗号分隔，留空表示允许所有人"></div>'
       ].join('');
       container.appendChild(itemDiv);
@@ -119,6 +120,7 @@
       client_secret: '',
       redirect_uri: window.location.origin + '/api/auth/callback/gitlab',
       enabled: true,
+      allow_token_login: false,
       allowed_usernames: []
     });
     renderGitlabInstances();
@@ -154,6 +156,7 @@
         '<div class="f-row"><label style="width:140px">Client Secret</label><input class="gt_client_secret" type="password" placeholder="' + (inst.client_secret_present ? '● 已配置（留空保持不变）' : 'Gitea OAuth Client Secret') + '"></div>',
         '<div class="f-row"><label style="width:140px">Redirect URI</label><input class="gt_redirect_uri" value="' + (inst.redirect_uri || '') + '" placeholder="如 http://your-domain/api/auth/callback/gitea"></div>',
         '<div class="f-row"><label style="width:140px">启用登录</label><input type="checkbox" class="gt_enabled" ' + (inst.enabled !== false ? 'checked' : '') + ' style="width:auto"></div>',
+        '<div class="f-row"><label style="width:140px">Token 登录</label><input type="checkbox" class="gt_allow_token" ' + (inst.allow_token_login ? 'checked' : '') + ' style="width:auto" title="开启后无需 OAuth 应用，用户可直接用 Gitea 个人访问令牌登录"></div>',
         '<div class="f-row"><label style="width:140px">用户白名单</label><input class="gt_allowed_usernames" value="' + ((inst.allowed_usernames || []).join(', ')) + '" placeholder="逗号分隔，留空表示允许所有人"></div>'
       ].join('');
       container.appendChild(itemDiv);
@@ -169,6 +172,7 @@
       client_secret: '',
       redirect_uri: window.location.origin + '/api/auth/callback/gitea',
       enabled: true,
+      allow_token_login: false,
       allowed_usernames: []
     });
     renderGiteaInstances();
@@ -263,6 +267,7 @@
       var csec = (row.querySelector('.gl_client_secret').value || '').trim();
       var ruri = (row.querySelector('.gl_redirect_uri').value || '').trim();
       var enabled = row.querySelector('.gl_enabled').checked;
+      var allowToken = row.querySelector('.gl_allow_token').checked;
       var allowed = (row.querySelector('.gl_allowed_usernames').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
       glList.push({
         id: key,
@@ -272,6 +277,7 @@
         client_secret: csec, // 若留空，后端会保留 previous_item 的 secret
         redirect_uri: ruri,
         enabled: enabled,
+        allow_token_login: allowToken,
         allowed_usernames: allowed
       });
     }
@@ -291,6 +297,7 @@
       var gtCsec = (gtRow.querySelector('.gt_client_secret').value || '').trim();
       var gtRuri = (gtRow.querySelector('.gt_redirect_uri').value || '').trim();
       var gtEnabled = gtRow.querySelector('.gt_enabled').checked;
+      var gtAllowToken = gtRow.querySelector('.gt_allow_token') ? gtRow.querySelector('.gt_allow_token').checked : false;
       var gtAllowed = (gtRow.querySelector('.gt_allowed_usernames').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
       gtList.push({
         id: gtKey,
@@ -300,6 +307,7 @@
         client_secret: gtCsec,
         redirect_uri: gtRuri,
         enabled: gtEnabled,
+        allow_token_login: gtAllowToken,
         allowed_usernames: gtAllowed
       });
     }

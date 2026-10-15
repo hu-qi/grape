@@ -631,7 +631,89 @@ def gitea_instances():
     mode, instances = login_instances()
     return {
         'mode': mode,
-        'instances': [{'id': x['id'], 'name': x['name'], 'base_url': x['base_url']} for x in instances]
+        'instances': [dict(
+            id=x.get('id', ''),
+            name=x.get('name', ''),
+            base_url=x.get('base_url', ''),
+            allow_token_login=bool(x.get('allow_token_login', False)),
+            oauth_ready=bool(x.get('client_id') and x.get('client_secret') and x.get('redirect_uri'))
+        ) for x in instances]
+    }
+
+
+class GiteaTokenLogin(BaseModel):
+    instance: str = ""
+    token: str = ""
+
+
+@router.post('/gitea/token-login')
+def gitea_token_login(body: GiteaTokenLogin, response: Response):
+    """Gitea Token 登录：当未配置 OAuth 应用时，使用 Personal Access Token 直接验证登录。
+
+    验证步骤：GET /api/v1/user (Authorization: token <token>) → 检查白名单 → 映射或创建用户。
+    """
+    import re
+    import requests
+    from src.user.gitea_config import get_login_instance
+    from src.user.gitea_identity import resolve_user
+    supplied = body.token.strip()
+    if not supplied:
+        raise HTTPException(400, detail={'message': 'Token 不能为空'})
+    try:
+        config = get_login_instance(body.instance)
+    except ValueError as exc:
+        raise HTTPException(400, detail={'message': str(exc)}) from exc
+    if not config.get('allow_token_login'):
+        raise HTTPException(403, detail={'message': '该 Gitea 实例未开启 Token 登录'})
+    try:
+        user_response = requests.get(
+            config['base_url'].rstrip('/') + '/api/v1/user',
+            headers={'Authorization': f'token {supplied}', 'Accept': 'application/json'},
+            timeout=15,
+            allow_redirects=False
+        )
+        if user_response.status_code in (401, 403):
+            raise HTTPException(400, detail={'message': 'Gitea Token 无效或已过期'})
+        user_response.raise_for_status()
+        profile = user_response.json()
+        if not profile.get('id') or not profile.get('login'):
+            raise ValueError('Missing user identity')
+    except HTTPException:
+        raise
+    except Exception:
+        log.warning('Gitea token login upstream failed for instance=%s', config['id'])
+        raise HTTPException(502, detail={'message': 'Gitea 实例连接失败，请检查实例地址与网络后重试'})
+
+    allowed = config.get('allowed_usernames', [])
+    if allowed and profile['login'] not in allowed:
+        raise HTTPException(403, detail={'message': '此 Gitea 账号不在该实例的登录白名单内'})
+
+    user = resolve_user(config['base_url'], profile)
+    if not user_db.set_credential(user['id'], 'gitea_login', {
+        'base_url': config['base_url'], 'gitea_user_id': str(profile['id']),
+        'username': profile['login'], 'instance': config['id'],
+    }):
+        raise HTTPException(500, detail={'message': '保存 Gitea 登录身份失败'})
+    account = user_db.get_user_account(user['username']) or {}
+    account['nickname'] = profile.get('full_name') or profile.get('name') or profile['login']
+    user_db.save_user_account(user['username'], account)
+    from src.api.jwt_utils import create_access_token, create_refresh_token
+    version = user_db.get_token_version(user['id'])
+    jwt_access = create_access_token(user['id'], user['username'], version,
+                                     login_provider='gitea', login_instance=config['id'])
+    jwt_refresh = create_refresh_token(user['id'], user['username'], version,
+                                       login_provider='gitea', login_instance=config['id'])
+    _set_refresh_cookie(response, jwt_refresh)
+    return {
+        'token': jwt_access,
+        'user': {
+            'id': user['id'],
+            'username': user['username'],
+            'nickname': account.get('nickname') or user['username'],
+            'avatar_url': user.get('avatar_url') or '',
+            'login_provider': 'gitea',
+            'login_instance': config['id']
+        }
     }
 
 

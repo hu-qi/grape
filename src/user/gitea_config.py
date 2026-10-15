@@ -52,13 +52,15 @@ def validate_config(data: dict, previous: dict) -> dict:
                      client_id=item.get('client_id', '').strip(),
                      client_secret=item.get('client_secret') or previous_item.get('client_secret', ''),
                      redirect_uri=redirect, enabled=item.get('enabled', True),
+                     allow_token_login=bool(item.get('allow_token_login', False)),
                      allowed_usernames=item.get('allowed_usernames', []))
         if not isinstance(entry['enabled'], bool):
             raise ValueError('Gitea enabled 必须为布尔值')
         if not isinstance(entry['allowed_usernames'], list) or not all(isinstance(x, str) for x in entry['allowed_usernames']):
             raise ValueError('Gitea 用户白名单必须为字符串列表')
-        if entry['enabled'] and not all(entry[k] for k in ('client_id', 'client_secret', 'redirect_uri')):
-            raise ValueError('启用 Gitea 登录前必须填写 Client ID、Secret 和回调地址')
+        if entry['enabled'] and not entry['allow_token_login'] \
+                and not all(entry[k] for k in ('client_id', 'client_secret', 'redirect_uri')):
+            raise ValueError('启用 Gitea 登录前必须填写 Client ID、Secret 和回调地址（或开启 Token 登录）')
         instances.append(entry)
     default = data.get('gitea_default_instance', '')
     if instances and default not in seen:
@@ -79,7 +81,9 @@ def login_instances() -> tuple[str, list[dict]]:
     data = load_config()
     mode = data.get('gitea_mode', 'single')
     entries = [item for item in data.get('gitea_instances', [])
-               if item.get('enabled') and all(item.get(k) for k in ('client_id', 'client_secret', 'redirect_uri'))]
+               if item.get('enabled')
+               and (all(item.get(k) for k in ('client_id', 'client_secret', 'redirect_uri'))
+                    or item.get('allow_token_login'))]
     if mode == 'single':
         entries = [item for item in entries if item['id'] == data.get('gitea_default_instance')]
     return mode, entries

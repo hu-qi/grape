@@ -124,3 +124,85 @@ def test_upstream_failure_does_not_leak_secret(configured):
         r = configured.get('/api/auth/callback/gitlab', params={'state': state, 'code': 'code'}, follow_redirects=False)
     assert r.status_code == 302
     assert 'secret-value' not in r.headers['location']
+
+
+# ===== GitLab PAT 登录（实例禁用「添加新应用」时免建 OAuth 应用） =====
+
+def token_instance(**changes):
+    inst = dict(instance('tok'), allow_token_login=True)
+    inst.update(client_id='', client_secret='', redirect_uri='')
+    inst.update(changes)
+    return inst
+
+
+def token_login(client, tok='glpat-abcdefghij1234567890', inst='tok'):
+    user = Mock(status_code=200)
+    user.json.return_value = {'id': 4242, 'username': 'alice', 'name': 'Alice'}
+    with patch('requests.get', return_value=user):
+        return client.post('/api/auth/gitlab/token-login', json={'instance': inst, 'token': tok})
+
+
+def test_token_login_creates_session(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance()]})
+    r = token_login(configured)
+    assert r.status_code == 200
+    claims = verify_access_token(r.json()['token'])
+    assert claims['login_provider'] == 'gitlab'
+    assert claims['login_instance'] == 'tok'
+    assert r.json()['user']['username'].startswith('gl_')
+
+
+def test_token_only_instance_needs_no_oauth_app(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance()]})
+    assert token_login(configured).status_code == 200
+
+
+def test_token_login_requires_instance_opt_in(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok',
+                              'gitlab_instances': [dict(instance('tok'), allow_token_login=False)]})
+    assert token_login(configured).status_code == 403
+
+
+def test_token_login_rejects_invalid_token(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance()]})
+    user = Mock(status_code=401)
+    with patch('requests.get', return_value=user):
+        r = configured.post('/api/auth/gitlab/token-login',
+                            json={'instance': 'tok', 'token': 'glpat-abcdefghij1234567890'})
+    assert r.status_code == 400
+    assert '无效' in r.json()['detail']['message']
+
+
+def test_token_login_rejects_bad_format_without_upstream(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance()]})
+    with patch('requests.get') as mock_get:
+        r = configured.post('/api/auth/gitlab/token-login', json={'instance': 'tok', 'token': 'short'})
+    assert r.status_code == 400
+    mock_get.assert_not_called()
+
+
+def test_token_login_enforces_whitelist(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance(allowed_usernames=['bob'])]})
+    assert token_login(configured).status_code == 403
+
+
+def test_token_login_shares_identity_with_oauth(configured):
+    config_store.save_config({'gitlab_instances': [dict(instance(), allow_token_login=True)]})
+    oauth = finish(configured, start(configured))
+    oauth_claims = verify_access_token(parse_qs(urlsplit(oauth.headers['location']).query)['token'][0])
+    token_claims = verify_access_token(token_login(configured, inst='private').json()['token'])
+    assert oauth_claims['sub'] == token_claims['sub']
+
+
+def test_disabled_token_instance_rejected(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance(enabled=False)]})
+    assert token_login(configured).status_code == 400
+
+
+def test_token_login_upstream_failure_is_sanitized(configured):
+    config_store.save_config({'gitlab_default_instance': 'tok', 'gitlab_instances': [token_instance()]})
+    with patch('requests.get', side_effect=RuntimeError('glpat-secret-value')):
+        r = configured.post('/api/auth/gitlab/token-login',
+                            json={'instance': 'tok', 'token': 'glpat-abcdefghij1234567890'})
+    assert r.status_code == 502
+    assert 'glpat-secret-value' not in r.text

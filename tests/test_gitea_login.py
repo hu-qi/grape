@@ -124,3 +124,56 @@ def test_upstream_failure_does_not_leak_secret(configured):
         r = configured.get('/api/auth/callback/gitea', params={'state': state, 'code': 'code'}, follow_redirects=False)
     assert r.status_code == 302
     assert 'gitea-secret-value' not in r.headers['location']
+
+
+# ===== Gitea PAT 登录 =====
+
+def token_instance(**changes):
+    inst = dict(instance('tok'), allow_token_login=True)
+    inst.update(client_id='', client_secret='', redirect_uri='')
+    inst.update(changes)
+    return inst
+
+
+def token_login(client, tok='gtpat-abcdefghij1234567890', inst='tok'):
+    user = Mock(status_code=200)
+    user.json.return_value = {'id': 9999, 'login': 'dev', 'username': 'dev', 'full_name': 'Dev User'}
+    with patch('requests.get', return_value=user):
+        return client.post('/api/auth/gitea/token-login', json={'instance': inst, 'token': tok})
+
+
+def test_token_login_creates_session(configured):
+    config_store.save_config({'gitea_default_instance': 'tok', 'gitea_instances': [token_instance()]})
+    r = token_login(configured)
+    assert r.status_code == 200
+    claims = verify_access_token(r.json()['token'])
+    assert claims['login_provider'] == 'gitea'
+    assert claims['login_instance'] == 'tok'
+    assert r.json()['user']['username'].startswith('gt_')
+
+
+def test_token_only_instance_needs_no_oauth_app(configured):
+    config_store.save_config({'gitea_default_instance': 'tok', 'gitea_instances': [token_instance()]})
+    assert token_login(configured).status_code == 200
+
+
+def test_token_login_requires_instance_opt_in(configured):
+    config_store.save_config({'gitea_default_instance': 'tok',
+                              'gitea_instances': [dict(instance('tok'), allow_token_login=False)]})
+    assert token_login(configured).status_code == 403
+
+
+def test_token_login_rejects_invalid_token(configured):
+    config_store.save_config({'gitea_default_instance': 'tok', 'gitea_instances': [token_instance()]})
+    user = Mock(status_code=401)
+    with patch('requests.get', return_value=user):
+        r = configured.post('/api/auth/gitea/token-login', json={'instance': 'tok', 'token': 'gtpat-abcdefghij1234567890'})
+    assert r.status_code == 400
+    assert '无效' in r.json()['detail']['message']
+
+
+def test_token_login_enforces_whitelist(configured):
+    config_store.save_config({'gitea_default_instance': 'tok',
+                              'gitea_instances': [dict(token_instance(), allowed_usernames=['someone_else'])]})
+    assert token_login(configured).status_code == 403
+

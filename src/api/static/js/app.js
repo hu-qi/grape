@@ -1120,7 +1120,8 @@ function loadAgentTypes() {
     overlay.id = 'glInstanceModal';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
     var itemsHtml = instances.map(inst => {
-      return '<div class="gl-inst-btn" onclick="app.oauthLoginGitlab(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
+      var action = inst.oauth_ready ? 'oauthLoginGitlab' : 'showGitlabTokenModal';
+      return '<div class="gl-inst-btn" onclick="app.' + action + '(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
         '<div>' +
           '<div style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</div>' +
           '<div style="font-size:11px;color:var(--t3,#86868b)">' + inst.base_url + '</div>' +
@@ -1140,6 +1141,48 @@ function loadAgentTypes() {
     document.body.appendChild(overlay);
   }
 
+  function showGitlabTokenModal(instanceId) {
+    var old = document.getElementById('glTokenModal');
+    if (old) old.remove();
+    var overlay = document.createElement('div');
+    overlay.id = 'glTokenModal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML =
+      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitlab_token_login') + '</h3>' +
+          '<span onclick="document.getElementById(\'glTokenModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
+        '</div>' +
+        '<input id="glTokenInput" type="password" autocomplete="off" placeholder="' + I18N.t('app.login.gitlab_token_placeholder') + '" style="width:100%;padding:10px 12px;border:1px solid var(--b,#e3e6ee);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">' +
+        '<div style="font-size:12px;color:var(--t3,#86868b);margin-top:8px">' + I18N.t('app.login.gitlab_token_hint') + '</div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
+          '<button onclick="document.getElementById(\'glTokenModal\').remove()" style="padding:8px 18px;border:1px solid var(--b,#e3e6ee);border-radius:8px;background:transparent;color:var(--t,#1d1d1f);font-size:13px;cursor:pointer">' + I18N.t('common.cancel') + '</button>' +
+          '<button id="glTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#fc6d26;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + I18N.t('app.login.gitlab_token_confirm') + '</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    var input = document.getElementById('glTokenInput');
+    input.focus();
+    function submit() {
+      var token = input.value.trim();
+      if (!token) return showToast(I18N.t('app.login.empty_input'));
+      var btn = document.getElementById('glTokenSubmit');
+      btn.disabled = true;
+      API.post('/auth/gitlab/token-login', {instance: instanceId || '', token: token}).then(d => {
+        localStorage.setItem('token', d.token);
+        localStorage.setItem('user', JSON.stringify(d.user));
+        API.scheduleProactiveRefresh();  // Issue #86: 启动主动刷新定时器
+        document.getElementById('glTokenModal').remove();
+        showApp();
+      }).catch(e => {
+        btn.disabled = false;
+        showToast(e.message || I18N.t('app.login.failed'));
+      });
+    }
+    document.getElementById('glTokenSubmit').onclick = submit;
+    input.onkeydown = function (ev) { if (ev.key === 'Enter') submit(); };
+  }
+
   function oauthLoginGitea(instanceId) {
     var url = '/auth/login/gitea' + (instanceId ? ('?instance=' + encodeURIComponent(instanceId)) : '');
     API.get(url).then(d => {
@@ -1155,7 +1198,8 @@ function loadAgentTypes() {
     overlay.id = 'gtInstanceModal';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
     var itemsHtml = instances.map(inst => {
-      return '<div class="gt-inst-btn" onclick="app.oauthLoginGitea(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
+      var action = inst.oauth_ready ? 'oauthLoginGitea' : 'showGiteaTokenModal';
+      return '<div class="gt-inst-btn" onclick="app.' + action + '(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
         '<div>' +
           '<div style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</div>' +
           '<div style="font-size:11px;color:var(--t3,#86868b)">' + inst.base_url + '</div>' +
@@ -1175,12 +1219,54 @@ function loadAgentTypes() {
     document.body.appendChild(overlay);
   }
 
+  function showGiteaTokenModal(instanceId) {
+    var old = document.getElementById('gtTokenModal');
+    if (old) old.remove();
+    var overlay = document.createElement('div');
+    overlay.id = 'gtTokenModal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML =
+      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitea_token_login') + '</h3>' +
+          '<span onclick="document.getElementById(\'gtTokenModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
+        '</div>' +
+        '<input id="gtTokenInput" type="password" autocomplete="off" placeholder="' + I18N.t('app.login.gitea_token_placeholder') + '" style="width:100%;padding:10px 12px;border:1px solid var(--b,#e3e6ee);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">' +
+        '<div style="font-size:12px;color:var(--t3,#86868b);margin-top:8px">' + I18N.t('app.login.gitea_token_hint') + '</div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
+          '<button onclick="document.getElementById(\'gtTokenModal\').remove()" style="padding:8px 18px;border:1px solid var(--b,#e3e6ee);border-radius:8px;background:transparent;color:var(--t,#1d1d1f);font-size:13px;cursor:pointer">' + I18N.t('common.cancel') + '</button>' +
+          '<button id="gtTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#609926;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + I18N.t('app.login.gitea_token_confirm') + '</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    var input = document.getElementById('gtTokenInput');
+    input.focus();
+    function submit() {
+      var token = input.value.trim();
+      if (!token) return showToast(I18N.t('app.login.empty_input'));
+      var btn = document.getElementById('gtTokenSubmit');
+      btn.disabled = true;
+      API.post('/auth/gitea/token-login', {instance: instanceId || '', token: token}).then(d => {
+        localStorage.setItem('token', d.token);
+        localStorage.setItem('user', JSON.stringify(d.user));
+        API.scheduleProactiveRefresh();
+        document.getElementById('gtTokenModal').remove();
+        showApp();
+      }).catch(e => {
+        btn.disabled = false;
+        showToast(e.message || I18N.t('app.login.failed'));
+      });
+    }
+    document.getElementById('gtTokenSubmit').onclick = submit;
+    input.onkeydown = function (ev) { if (ev.key === 'Enter') submit(); };
+  }
+
   function loadLoginProviders() {
     var container = document.getElementById('dynamicLoginButtons');
     if (!container) return;
     container.innerHTML = '';
 
-    // 加载 GitLab 登录按钮
+    // 加载 GitLab 登录按钮（oauth_ready → OAuth；仅 allow_token_login → Token 登录）
     API.get('/auth/gitlab/instances').then(d => {
       var instances = d.instances || [];
       var mode = d.mode || 'single';
@@ -1197,7 +1283,12 @@ function loadAgentTypes() {
 
       btn.onclick = function () {
         if (mode === 'single' || instances.length === 1) {
-          oauthLoginGitlab(instances[0].id);
+          var inst = instances[0];
+          if (inst.oauth_ready) {
+            oauthLoginGitlab(inst.id);
+          } else if (inst.allow_token_login) {
+            showGitlabTokenModal(inst.id);
+          }
         } else {
           showGitlabInstanceModal(instances);
         }
@@ -1222,7 +1313,12 @@ function loadAgentTypes() {
 
       btn.onclick = function () {
         if (mode === 'single' || instances.length === 1) {
-          oauthLoginGitea(instances[0].id);
+          var inst = instances[0];
+          if (inst.oauth_ready) {
+            oauthLoginGitea(inst.id);
+          } else if (inst.allow_token_login) {
+            showGiteaTokenModal(inst.id);
+          }
         } else {
           showGiteaInstanceModal(instances);
         }
@@ -1866,7 +1962,7 @@ function loadAgentTypes() {
     }
   }
 
-  return {nav, search, oauthLogin, oauthLoginGithub, oauthLoginGitlab, showGitlabInstanceModal, oauthLoginGitea, showGiteaInstanceModal, loadLoginProviders, openBetaApply, submitBetaApply, baSelectIdentity, baToggleOther, logout, showToast, openHelp, closeHelp, switchRepo, switchOrg, goToRepos, currentRepo, showLogin, init, loadRepos, initSidebarRepos, loadProfile, getTheme, getThemeMode, setTheme, setThemeMode, toggleGroup, toggleSidebar, showConfirm, closeConfirm, _toggleOrgDropdown, _updateTbOrgName, _toggleLobbyOrgDropdown, _updateLobbyOrgName, _toggleLobbyUserMenu};
+  return {nav, search, oauthLogin, oauthLoginGithub, oauthLoginGitlab, showGitlabInstanceModal, showGitlabTokenModal, oauthLoginGitea, showGiteaInstanceModal, showGiteaTokenModal, loadLoginProviders, openBetaApply, submitBetaApply, baSelectIdentity, baToggleOther, logout, showToast, openHelp, closeHelp, switchRepo, switchOrg, goToRepos, currentRepo, showLogin, init, loadRepos, initSidebarRepos, loadProfile, getTheme, getThemeMode, setTheme, setThemeMode, toggleGroup, toggleSidebar, showConfirm, closeConfirm, _toggleOrgDropdown, _updateTbOrgName, _toggleLobbyOrgDropdown, _updateLobbyOrgName, _toggleLobbyUserMenu};
 })();
 
 /** 根据 repo_key 生成 VCS 平台 URL（仓库/Issue 等通用）。 */
