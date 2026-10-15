@@ -1264,12 +1264,28 @@ function loadAgentTypes() {
   function loadLoginProviders() {
     var container = document.getElementById('dynamicLoginButtons');
     if (!container) return;
-    container.innerHTML = '';
+
+    var glSlot = document.getElementById('gitlabBtnSlot');
+    if (!glSlot) {
+      glSlot = document.createElement('div');
+      glSlot.id = 'gitlabBtnSlot';
+      container.appendChild(glSlot);
+    }
+    glSlot.innerHTML = '';
+
+    var gtSlot = document.getElementById('giteaBtnSlot');
+    if (!gtSlot) {
+      gtSlot = document.createElement('div');
+      gtSlot.id = 'giteaBtnSlot';
+      container.appendChild(gtSlot);
+    }
+    gtSlot.innerHTML = '';
 
     // 加载 GitLab 登录按钮（oauth_ready → OAuth；仅 allow_token_login → Token 登录）
     API.get('/auth/gitlab/instances').then(d => {
       var instances = d.instances || [];
       var mode = d.mode || 'single';
+      glSlot.innerHTML = '';
       if (instances.length === 0) return;
 
       var btn = document.createElement('button');
@@ -1293,13 +1309,14 @@ function loadAgentTypes() {
           showGitlabInstanceModal(instances);
         }
       };
-      container.appendChild(btn);
+      glSlot.appendChild(btn);
     }).catch(() => {});
 
     // 加载 Gitea 登录按钮
     API.get('/auth/gitea/instances').then(d => {
       var instances = d.instances || [];
       var mode = d.mode || 'single';
+      gtSlot.innerHTML = '';
       if (instances.length === 0) return;
 
       var btn = document.createElement('button');
@@ -1323,7 +1340,7 @@ function loadAgentTypes() {
           showGiteaInstanceModal(instances);
         }
       };
-      container.appendChild(btn);
+      gtSlot.appendChild(btn);
     }).catch(() => {});
   }
 

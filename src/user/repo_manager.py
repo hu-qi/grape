@@ -895,3 +895,277 @@ def create_github_repo(api_token: str, name: str, description: str = "", private
     if not full_name:
         raise RuntimeError(f"创建仓库成功但未返回仓库信息: {json.dumps(result, ensure_ascii=False)[:200]}")
     return result
+
+
+# =====================================================================
+# Gitea API 客户端与仓库管理
+# =====================================================================
+
+def _get_default_gitea_base_url() -> str:
+    """获取默认 Gitea base_url"""
+    try:
+        from src.admin.config_store import load_config
+        from src.user.gitea_config import get_login_instance
+        cfg = get_login_instance()
+        return cfg.get("base_url", "https://gitea.com").rstrip("/")
+    except Exception:
+        return "https://gitea.com"
+
+
+def _gitea_req(method: str, url: str, api_token: str, body: dict = None) -> dict | list | None:
+    """发送 Gitea API 请求（verify=False 兼容内网自签证书）"""
+    import requests
+    headers = {
+        "Authorization": f"token {api_token}",
+        "Accept": "application/json",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    resp = requests.request(
+        method=method,
+        url=url,
+        headers=headers,
+        json=body if body is not None else None,
+        timeout=15,
+        verify=False,
+    )
+    if resp.status_code == 204:
+        return {}
+    if resp.status_code >= 400:
+        err_msg = ""
+        try:
+            err_msg = resp.json().get("message", "")
+        except Exception:
+            err_msg = resp.text
+        raise RuntimeError(f"Gitea API {method} {url} error ({resp.status_code}): {err_msg}")
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def fetch_gitea_repos_with_role(api_token: str, base_url: str = "") -> list[dict]:
+    """获取用户的 Gitea 仓库列表。
+    返回：[{"full_name": "owner/repo", "owner": "owner", "name": "repo", "is_admin": bool, "repo_key": "gitea:owner/repo"}, ...]
+    """
+    if not api_token:
+        raise RuntimeError("Gitea API Token 未配置")
+    base = (base_url or _get_default_gitea_base_url()).rstrip("/")
+    repos = []
+    page = 1
+    while True:
+        url = f"{base}/api/v1/user/repos?limit=50&page={page}"
+        data = _gitea_req("GET", url, api_token)
+        items = data if isinstance(data, list) else []
+        if not items:
+            break
+        for r in items:
+            full_name = r.get("full_name", "")
+            if not full_name or "/" not in full_name:
+                continue
+            owner = r.get("owner", {}).get("login", "") if isinstance(r.get("owner"), dict) else full_name.split("/")[0]
+            name = r.get("name", "") or full_name.split("/")[1]
+            perm = r.get("permissions") or {}
+            is_admin = bool(perm.get("admin")) if isinstance(perm, dict) else False
+            repos.append({
+                "full_name": full_name,
+                "owner": owner,
+                "name": name,
+                "is_admin": is_admin,
+                "created_at": r.get("created_at", "") or "",
+                "repo_key": f"gitea:{full_name}",
+                "description": r.get("description", "") or "",
+                "html_url": r.get("html_url", "") or f"{base}/{full_name}",
+            })
+        if len(items) < 50:
+            break
+        page += 1
+    return repos
+
+
+def create_gitea_repo(api_token: str, name: str, description: str = "", private: bool = False, base_url: str = "") -> dict:
+    """在 token 用户名下创建 Gitea 仓库"""
+    if not api_token:
+        raise RuntimeError("Gitea API Token 未配置")
+    base = (base_url or _get_default_gitea_base_url()).rstrip("/")
+    body = {
+        "name": name,
+        "description": description,
+        "private": bool(private),
+        "auto_init": False,
+    }
+    result = _gitea_req("POST", f"{base}/api/v1/user/repos", api_token, body)
+    full_name = result.get("full_name", "")
+    if not full_name:
+        raise RuntimeError(f"创建 Gitea 仓库成功但未返回仓库信息: {result}")
+    return result
+
+
+def setup_gitea_webhook(api_token: str, owner: str, repo: str, webhook_url: str, secret: str = "", base_url: str = "") -> int:
+    """为 Gitea 仓库配置 Webhook"""
+    if not api_token:
+        raise RuntimeError("Gitea API Token 未配置")
+    base = (base_url or _get_default_gitea_base_url()).rstrip("/")
+    hooks_url = f"{base}/api/v1/repos/{owner}/{repo}/hooks"
+    # 查重
+    existing = _gitea_req("GET", hooks_url, api_token)
+    if isinstance(existing, list):
+        for h in existing:
+            cfg = h.get("config", {})
+            if cfg.get("url") == webhook_url:
+                return h.get("id", 0)
+    body = {
+        "type": "gitea",
+        "config": {
+            "url": webhook_url,
+            "content_type": "json",
+            "secret": secret,
+        },
+        "events": ["push", "issues", "issue_comment", "pull_request"],
+        "active": True,
+    }
+    res = _gitea_req("POST", hooks_url, api_token, body)
+    return res.get("id", 0)
+
+
+# =====================================================================
+# GitLab API 客户端与仓库管理
+# =====================================================================
+
+def _get_default_gitlab_base_url() -> str:
+    """获取默认 GitLab base_url"""
+    try:
+        from src.admin.config_store import load_config
+        from src.user.gitlab_config import get_login_instance
+        cfg = get_login_instance()
+        return cfg.get("base_url", "").rstrip("/")
+    except Exception:
+        return ""
+
+
+def _gitlab_req(method: str, url: str, api_token: str, body: dict = None) -> dict | list | None:
+    """发送 GitLab API 请求（verify=False 兼容内网自签证书）"""
+    import requests
+    headers = {
+        "PRIVATE-TOKEN": api_token,
+        "Accept": "application/json",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    resp = requests.request(
+        method=method,
+        url=url,
+        headers=headers,
+        json=body if body is not None else None,
+        timeout=15,
+        verify=False,
+    )
+    if resp.status_code == 204:
+        return {}
+    if resp.status_code >= 400:
+        err_msg = ""
+        try:
+            err_msg = resp.json().get("message", "")
+        except Exception:
+            err_msg = resp.text
+        raise RuntimeError(f"GitLab API {method} {url} error ({resp.status_code}): {err_msg}")
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def fetch_gitlab_repos_with_role(api_token: str, base_url: str = "") -> list[dict]:
+    """获取用户的 GitLab 项目列表。
+    返回：[{"full_name": "owner/repo", "owner": "owner", "name": "repo", "is_admin": bool, "repo_key": "gitlab:owner/repo"}, ...]
+    """
+    if not api_token:
+        raise RuntimeError("GitLab API Token 未配置")
+    base = (base_url or _get_default_gitlab_base_url()).rstrip("/")
+    if not base:
+        raise RuntimeError("GitLab 实例地址未配置")
+    repos = []
+    page = 1
+    while True:
+        url = f"{base}/api/v4/projects?membership=true&per_page=100&page={page}&order_by=name"
+        data = _gitlab_req("GET", url, api_token)
+        items = data if isinstance(data, list) else []
+        if not items:
+            break
+        for p in items:
+            full_name = p.get("path_with_namespace", "")
+            if not full_name or "/" not in full_name:
+                continue
+            name = p.get("path", "") or full_name.split("/")[-1]
+            owner = full_name.rsplit("/", 1)[0]
+            # GitLab permissions: project_access (>=40 is Maintainer/Admin) or group_access
+            perms = p.get("permissions") or {}
+            p_access = perms.get("project_access") or {}
+            g_access = perms.get("group_access") or {}
+            access_level = max(p_access.get("access_level", 0), g_access.get("access_level", 0))
+            is_admin = access_level >= 40 or p.get("is_admin", False)
+            repos.append({
+                "full_name": full_name,
+                "owner": owner,
+                "name": name,
+                "is_admin": is_admin,
+                "created_at": p.get("created_at", "") or "",
+                "repo_key": f"gitlab:{full_name}",
+                "description": p.get("description", "") or "",
+                "html_url": p.get("web_url", "") or f"{base}/{full_name}",
+            })
+        if len(items) < 100:
+            break
+        page += 1
+    return repos
+
+
+def create_gitlab_repo(api_token: str, name: str, description: str = "", private: bool = False, base_url: str = "") -> dict:
+    """在当前用户个人名下创建 GitLab 项目"""
+    if not api_token:
+        raise RuntimeError("GitLab API Token 未配置")
+    base = (base_url or _get_default_gitlab_base_url()).rstrip("/")
+    if not base:
+        raise RuntimeError("GitLab 实例地址未配置")
+    body = {
+        "name": name,
+        "path": name,
+        "description": description,
+        "visibility": "private" if private else "public",
+        "initialize_with_readme": False,
+    }
+    result = _gitlab_req("POST", f"{base}/api/v4/projects", api_token, body)
+    full_name = result.get("path_with_namespace", "")
+    if not full_name:
+        raise RuntimeError(f"创建 GitLab 仓库成功但未返回路径信息: {result}")
+    result["full_name"] = full_name
+    return result
+
+
+def setup_gitlab_webhook(api_token: str, full_name: str, webhook_url: str, secret: str = "", base_url: str = "") -> int:
+    """为 GitLab 项目配置 Webhook"""
+    if not api_token:
+        raise RuntimeError("GitLab API Token 未配置")
+    base = (base_url or _get_default_gitlab_base_url()).rstrip("/")
+    if not base:
+        raise RuntimeError("GitLab 实例地址未配置")
+    import urllib.parse
+    encoded_project = urllib.parse.quote(full_name, safe="")
+    hooks_url = f"{base}/api/v4/projects/{encoded_project}/hooks"
+    # 查重
+    existing = _gitlab_req("GET", hooks_url, api_token)
+    if isinstance(existing, list):
+        for h in existing:
+            if h.get("url") == webhook_url:
+                return h.get("id", 0)
+    body = {
+        "url": webhook_url,
+        "token": secret,
+        "push_events": True,
+        "issues_events": True,
+        "note_events": True,
+        "merge_requests_events": True,
+        "enable_ssl_verification": False,
+    }
+    res = _gitlab_req("POST", hooks_url, api_token, body)
+    return res.get("id", 0)

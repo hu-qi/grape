@@ -207,6 +207,26 @@ def get_user_github_token(username: str) -> str:
     return acc.get("github_api_token", "")
 
 
+def get_user_gitlab_token(username_or_id, instance_id: str = "") -> str:
+    """获取用户的 GitLab API Token"""
+    return user_db.get_user_gitlab_token(username_or_id, instance_id=instance_id)
+
+
+def get_user_gitea_token(username_or_id, instance_id: str = "") -> str:
+    """获取用户的 Gitea API Token"""
+    return user_db.get_user_gitea_token(username_or_id, instance_id=instance_id)
+
+
+def get_user_gitlab_credential(username_or_id, instance_id: str = "") -> dict | None:
+    """获取用户的 GitLab 凭据"""
+    return user_db.get_user_gitlab_credential(username_or_id, instance_id=instance_id)
+
+
+def get_user_gitea_credential(username_or_id, instance_id: str = "") -> dict | None:
+    """获取用户的 Gitea 凭据"""
+    return user_db.get_user_gitea_credential(username_or_id, instance_id=instance_id)
+
+
 def _get_user_refresh_lock(user_id: int) -> threading.Lock:
     """获取用户级别的 GitCode OAuth 刷新锁（懒创建，Issue #52）。"""
     with _gitcode_refresh_locks_guard:

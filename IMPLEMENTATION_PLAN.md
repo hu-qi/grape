@@ -35,8 +35,21 @@
 ## Stage 6: Multi-instance configuration and live deployment verification
 **Goal**: Deploy changes to test environment (http://172.16.145.207:18899/kubernetes/gpditest/namespace/aidev) and verify live login flows.
 **Success Criteria**:
-- Configured instances (internal GitLab `https://gitlab.devops.cndatacom.com`, private Gitea `http://172.16.145.202:30344`, official Gitea `https://gitea.com`) correctly display on login page.
+- Configured instances (internal GitLab `https://gitlab.devops.cndatacom.com:18443`, private Gitea `http://172.16.145.202:30344`, official Gitea `https://gitea.com`) correctly display on login page without mutual interference.
+- Fixed 502 connection issue to internal GitLab by using correct port (`18443`), `hostAliases`, and SSL `verify=False` for enterprise internal environments.
 - Direct Token login succeeds for internal GitLab (`9527` / 胡琦) and private Gitea (`dev`).
 **Status**: Completed
+
+## Stage 7: Gitea & GitLab API Token persistence and repository management
+**Goal**: Persist upstream API tokens upon login and bridge repository endpoints (`/api/repos/member`, `/api/repos/sync`, `/api/repos/check-name`, `/api/repos/create`, `/api/repos/host`) for Gitea and GitLab instances.
+**Success Criteria**:
+- Gitea and GitLab login flows (both OAuth and Token login) securely store the upstream API token in user credentials keyed by user and instance.
+- `_get_user_provider_and_token` resolves active Gitea / GitLab tokens based on `login_provider` and `login_instance`.
+- Resolves the 400 error (`API Token 未配置`) when calling `/api/repos/member` after logging in with Gitea or GitLab.
+- `src/user/repo_manager.py` implements upstream repository listing, creation, and webhook configuration for Gitea and GitLab with SSL bypass for internal networks.
+- Frontend repository list displays proper platform icons, badges, and external repository links.
+**Tests**: Unit tests in `test_gitlab_login.py`, `test_gitea_login.py`, and `test_gitea_gitlab_repos.py`.
+**Status**: Completed
+
 
 

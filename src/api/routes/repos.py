@@ -30,11 +30,11 @@ class CreateRepoBody(BaseModel):
     host_after_create: bool = False
 
 
-def _get_user_provider_and_token(username: str, login_provider: str = "") -> tuple[str, str]:
+def _get_user_provider_and_token(username: str, login_provider: str = "", login_instance: str = "") -> tuple[str, str]:
     """根据用户已绑定的令牌自动选择 provider，返回 (provider, token)。
 
-    login_provider：登录来源平台（gitcode/github），优先返回对应平台 token；
-    缺失或对应平台无 token 时 fallback 到现有优先级逻辑（github 优先）。
+    login_provider：登录来源平台（gitcode/github/gitea/gitlab），优先返回对应平台 token；
+    缺失或对应平台无 token 时 fallback 到现有优先级逻辑。
     """
     if login_provider == "gitcode":
         gitcode_token = get_user_token(username)
@@ -44,16 +44,35 @@ def _get_user_provider_and_token(username: str, login_provider: str = "") -> tup
         github_token = get_user_github_token(username)
         if github_token:
             return "github", github_token
+    elif login_provider == "gitea":
+        from src.api.deps import get_user_gitea_token
+        gitea_token = get_user_gitea_token(username, instance_id=login_instance)
+        if gitea_token:
+            return "gitea", gitea_token
+    elif login_provider == "gitlab":
+        from src.api.deps import get_user_gitlab_token
+        gitlab_token = get_user_gitlab_token(username, instance_id=login_instance)
+        if gitlab_token:
+            return "gitlab", gitlab_token
+
+    # 兜底优先级：github -> gitea -> gitlab -> gitcode
     github_token = get_user_github_token(username)
     if github_token:
         return "github", github_token
+    from src.api.deps import get_user_gitea_token, get_user_gitlab_token
+    gitea_token = get_user_gitea_token(username, instance_id=login_instance)
+    if gitea_token:
+        return "gitea", gitea_token
+    gitlab_token = get_user_gitlab_token(username, instance_id=login_instance)
+    if gitlab_token:
+        return "gitlab", gitlab_token
     gitcode_token = get_user_token(username)
     if gitcode_token:
         return "gitcode", gitcode_token
     return "", ""
 
 
-def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode") -> list[dict]:
+def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode", username: str = "", login_instance: str = "") -> list[dict]:
     """从 VCS 拉取仓库列表，写入 user_repos 缓存，返回过滤后的结果"""
     if provider == "github":
         from src.user.repo_manager import fetch_github_repos_with_role
@@ -62,6 +81,24 @@ def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode") ->
         for r in repos:
             if not r.get("repo_key"):
                 r["repo_key"] = f"github:{r.get('full_name', '')}"
+    elif provider == "gitea":
+        from src.user.repo_manager import fetch_gitea_repos_with_role
+        from src.api.deps import get_user_gitea_credential
+        cred = get_user_gitea_credential(user_id or username, instance_id=login_instance)
+        base_url = cred.get("base_url", "") if cred else ""
+        repos = fetch_gitea_repos_with_role(api_token, base_url=base_url)
+        for r in repos:
+            if not r.get("repo_key"):
+                r["repo_key"] = f"gitea:{r.get('full_name', '')}"
+    elif provider == "gitlab":
+        from src.user.repo_manager import fetch_gitlab_repos_with_role
+        from src.api.deps import get_user_gitlab_credential
+        cred = get_user_gitlab_credential(user_id or username, instance_id=login_instance)
+        base_url = cred.get("base_url", "") if cred else ""
+        repos = fetch_gitlab_repos_with_role(api_token, base_url=base_url)
+        for r in repos:
+            if not r.get("repo_key"):
+                r["repo_key"] = f"gitlab:{r.get('full_name', '')}"
     else:
         repos = fetch_repos_with_role(api_token)
     user_db.save_user_repos(user_id, repos)
@@ -269,7 +306,9 @@ def list_member_repos(user: dict = Depends(require_org_member)):
     """
     from datetime import datetime, timezone
 
-    provider, api_token = _get_user_provider_and_token(user["username"], user.get("login_provider", ""))
+    login_prov = user.get("login_provider", "")
+    login_inst = user.get("login_instance", "")
+    provider, api_token = _get_user_provider_and_token(user["username"], login_prov, login_instance=login_inst)
     if not api_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置，请先通过 OAuth 登录或配置个人 Token"})
 
@@ -315,7 +354,7 @@ def list_member_repos(user: dict = Depends(require_org_member)):
     # 缓存为空或已过期 → 从 VCS 拉取并刷新缓存
     # 组织隔离模式下也同步全量 user_repos（_filter_repos 负责过滤）
     try:
-        repos = _fetch_and_cache(user["id"], api_token, provider)
+        repos = _fetch_and_cache(user["id"], api_token, provider, username=user["username"], login_instance=login_inst)
     except Exception as e:
         # 拉取失败但有旧缓存兜底（避免 GitCode 抖动导致页面空白）
         if cached:
@@ -332,7 +371,9 @@ def sync_repos(user: dict = Depends(require_org_member)):
     组织隔离：同步 GitCode 全量到 user_repos 缓存，但返回时按当前组织过滤
     （只返回该组织已托管的仓库 + 个人组织返回全量）。
     """
-    provider, api_token = _get_user_provider_and_token(user["username"], user.get("login_provider", ""))
+    login_prov = user.get("login_provider", "")
+    login_inst = user.get("login_instance", "")
+    provider, api_token = _get_user_provider_and_token(user["username"], login_prov, login_instance=login_inst)
     if not api_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置"})
 
@@ -340,7 +381,7 @@ def sync_repos(user: dict = Depends(require_org_member)):
         _probe_stale_repos(api_token, user["id"])
 
     try:
-        repos = _fetch_and_cache(user["id"], api_token, provider)
+        repos = _fetch_and_cache(user["id"], api_token, provider, username=user["username"], login_instance=login_inst)
     except Exception as e:
         raise HTTPException(status_code=502, detail={"code": 502, "message": f"同步失败: {e}"})
 
@@ -357,7 +398,9 @@ def sync_repos(user: dict = Depends(require_org_member)):
 @router.get("/check-name", operation_id="repos_check_name", summary="Check repo name availability", description="Checks whether a repository with the same name already exists under the current user.")
 def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
     """检查当前用户名下是否已存在同名仓库"""
-    provider, api_token = _get_user_provider_and_token(user["username"], user.get("login_provider", ""))
+    login_prov = user.get("login_provider", "")
+    login_inst = user.get("login_instance", "")
+    provider, api_token = _get_user_provider_and_token(user["username"], login_prov, login_instance=login_inst)
     if not api_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置"})
 
@@ -368,6 +411,50 @@ def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
             if not login:
                 raise HTTPException(status_code=502, detail={"code": 502, "message": "无法获取当前用户身份"})
             _github_req("GET", f"https://api.github.com/repos/{login}/{name}", api_token)
+            return {"exists": True, "full_name": f"{login}/{name}"}
+        except RuntimeError as e:
+            if "404" in str(e) or "Not Found" in str(e):
+                return {"exists": False}
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"检查失败: {e}"})
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"检查失败: {e}"})
+
+    elif provider == "gitea":
+        from src.user.repo_manager import _gitea_req, _get_default_gitea_base_url
+        from src.api.deps import get_user_gitea_credential
+        try:
+            cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+            base = (cred.get("base_url") if cred else _get_default_gitea_base_url()).rstrip("/")
+            u_data = _gitea_req("GET", f"{base}/api/v1/user", api_token)
+            login = u_data.get("username") or u_data.get("login") or (cred.get("username") if cred else "")
+            if not login:
+                raise HTTPException(status_code=502, detail={"code": 502, "message": "无法获取当前用户身份"})
+            _gitea_req("GET", f"{base}/api/v1/repos/{login}/{name}", api_token)
+            return {"exists": True, "full_name": f"{login}/{name}"}
+        except RuntimeError as e:
+            if "404" in str(e) or "Not Found" in str(e):
+                return {"exists": False}
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"检查失败: {e}"})
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"检查失败: {e}"})
+
+    elif provider == "gitlab":
+        from src.user.repo_manager import _gitlab_req, _get_default_gitlab_base_url
+        from src.api.deps import get_user_gitlab_credential
+        import urllib.parse
+        try:
+            cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+            base = (cred.get("base_url") if cred else _get_default_gitlab_base_url()).rstrip("/")
+            u_data = _gitlab_req("GET", f"{base}/api/v4/user", api_token)
+            login = u_data.get("username") or (cred.get("username") if cred else "")
+            if not login:
+                raise HTTPException(status_code=502, detail={"code": 502, "message": "无法获取当前用户身份"})
+            project_path = urllib.parse.quote(f"{login}/{name}", safe="")
+            _gitlab_req("GET", f"{base}/api/v4/projects/{project_path}", api_token)
             return {"exists": True, "full_name": f"{login}/{name}"}
         except RuntimeError as e:
             if "404" in str(e) or "Not Found" in str(e):
@@ -411,7 +498,9 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
     else:
         private = body.private
 
-    provider, api_token = _get_user_provider_and_token(user["username"], user.get("login_provider", ""))
+    login_prov = user.get("login_provider", "")
+    login_inst = user.get("login_instance", "")
+    provider, api_token = _get_user_provider_and_token(user["username"], login_prov, login_instance=login_inst)
     if not api_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置，请先通过 OAuth 登录或配置个人 Token"})
 
@@ -419,6 +508,24 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
         from src.user.repo_manager import create_github_repo as _create_gh_repo
         try:
             repo_info = _create_gh_repo(api_token=api_token, name=name, description=body.description, private=private)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"创建仓库失败: {e}"})
+    elif provider == "gitea":
+        from src.user.repo_manager import create_gitea_repo as _create_gitea_repo
+        from src.api.deps import get_user_gitea_credential
+        cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+        base = cred.get("base_url") if cred else ""
+        try:
+            repo_info = _create_gitea_repo(api_token=api_token, name=name, description=body.description, private=private, base_url=base)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"创建仓库失败: {e}"})
+    elif provider == "gitlab":
+        from src.user.repo_manager import create_gitlab_repo as _create_gitlab_repo
+        from src.api.deps import get_user_gitlab_credential
+        cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+        base = cred.get("base_url") if cred else ""
+        try:
+            repo_info = _create_gitlab_repo(api_token=api_token, name=name, description=body.description, private=private, base_url=base)
         except Exception as e:
             raise HTTPException(status_code=502, detail={"code": 502, "message": f"创建仓库失败: {e}"})
     else:
@@ -434,7 +541,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
     repo_name = repo_info.get("name") or name
 
     try:
-        _fetch_and_cache(user["id"], api_token, provider)
+        _fetch_and_cache(user["id"], api_token, provider, username=user["username"], login_instance=login_inst)
     except Exception:
         pass
 
@@ -443,40 +550,61 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
         webhook_url = get_webhook_url()
         if not webhook_url:
             raise HTTPException(status_code=400, detail={"code": 400, "message": "webhook_url 未配置，无法托管"})
-        # GitHub 仓库用 /webhook/github 路由
         if provider == "github":
             webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/github")
-        if provider == "github":
-            from src.user.repo_manager import find_existing_github_webhook, setup_github_webhook
-            _create_global_bot_token = ""
-        else:
-            _create_global_bot_token = ""
-            try:
-                import json as _json, os as _os2
-                _gbt_path2 = _os2.path.join(_os2.path.dirname(__file__), "..", "..", "..", "configs", "global-bot-token.json")
-                if _os2.path.exists(_gbt_path2):
-                    with open(_gbt_path2, "r", encoding="utf-8") as _f2:
-                        _create_global_bot_token = _json.load(_f2).get("gitcode_api_token", "") or ""
-            except Exception:
-                pass
+        elif provider == "gitea":
+            webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/gitea")
+        elif provider == "gitlab":
+            webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/gitlab")
+
         try:
             if provider == "github":
+                from src.user.repo_manager import find_existing_github_webhook, setup_github_webhook
                 existing_id = find_existing_github_webhook(api_token, owner, repo_name, webhook_url)
                 repo_key = to_repo_key(full_name, provider="github")
                 wh_col = "github_webhook_token"
+                if existing_id:
+                    user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=existing_id, **{wh_col: api_token})
+                else:
+                    hook_id = setup_github_webhook(api_token, owner, repo_name, webhook_url)
+                    user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, **{wh_col: api_token})
+                user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
+            elif provider == "gitea":
+                from src.user.repo_manager import setup_gitea_webhook
+                from src.api.deps import get_user_gitea_credential
+                cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+                base = cred.get("base_url") if cred else ""
+                repo_key = to_repo_key(full_name, provider="gitea")
+                hook_id = setup_gitea_webhook(api_token, owner, repo_name, webhook_url, base_url=base)
+                user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id)
+                user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
+            elif provider == "gitlab":
+                from src.user.repo_manager import setup_gitlab_webhook
+                from src.api.deps import get_user_gitlab_credential
+                cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+                base = cred.get("base_url") if cred else ""
+                repo_key = to_repo_key(full_name, provider="gitlab")
+                hook_id = setup_gitlab_webhook(api_token, full_name, webhook_url, base_url=base)
+                user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id)
+                user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
             else:
+                _create_global_bot_token = ""
+                try:
+                    import json as _json, os as _os2
+                    _gbt_path2 = _os2.path.join(_os2.path.dirname(__file__), "..", "..", "..", "configs", "global-bot-token.json")
+                    if _os2.path.exists(_gbt_path2):
+                        with open(_gbt_path2, "r", encoding="utf-8") as _f2:
+                            _create_global_bot_token = _json.load(_f2).get("gitcode_api_token", "") or ""
+                except Exception:
+                    pass
                 existing_id = find_existing_webhook(api_token, owner, repo_name, webhook_url)
                 repo_key = to_repo_key(full_name)
                 wh_col = "gitcode_webhook_token"
-            if existing_id:
-                user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=existing_id, **{wh_col: api_token, "bot_gitcode_token": _create_global_bot_token})
-                user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
-            else:
-                if provider == "github":
-                    hook_id = setup_github_webhook(api_token, owner, repo_name, webhook_url)
+                if existing_id:
+                    user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=existing_id, **{wh_col: api_token, "bot_gitcode_token": _create_global_bot_token})
                 else:
                     hook_id = setup_webhook(api_token, owner, repo_name, webhook_url, webhook_password=api_token)
-                user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, **{wh_col: api_token, "bot_gitcode_token": _create_global_bot_token})
+                    user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, **{wh_col: api_token, "bot_gitcode_token": _create_global_bot_token})
                 user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
             from src.api.session_store import ensure_default_agent_sessions
             ensure_default_agent_sessions(repo_key)
@@ -484,7 +612,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
             return {"repo": repo_info, "full_name": full_name, "owner": owner, "name": repo_name, "hosted": False, "message": f"仓库已创建，但托管失败: {e}"}
 
         try:
-            _fetch_and_cache(user["id"], api_token, provider)
+            _fetch_and_cache(user["id"], api_token, provider, username=user["username"], login_instance=login_inst)
         except Exception:
             pass
         return {"repo": repo_info, "full_name": full_name, "owner": owner, "name": repo_name, "hosted": True, "message": "仓库创建并托管成功"}
@@ -564,15 +692,63 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
         raise HTTPException(status_code=400, detail={"code": 400, "message": "无效的仓库标识"})
     owner, repo_name = parts
 
-    provider, api_token = _get_user_provider_and_token(user["username"], user.get("login_provider", ""))
+    login_prov = user.get("login_provider", "")
+    login_inst = user.get("login_instance", "")
+    provider, api_token = _get_user_provider_and_token(user["username"], login_prov, login_instance=login_inst)
     from src.user.db import get_webhook_url
     webhook_url = get_webhook_url()
-    # GitHub 仓库用 /webhook/github 路由
+    # 根据 provider 分发 webhook 路由
     if provider == "github":
         webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/github")
+    elif provider == "gitea":
+        webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/gitea")
+    elif provider == "gitlab":
+        webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/gitlab")
 
     if not api_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置"})
+
+    # ===== Gitea 仓库托管 =====
+    if provider == "gitea":
+        from src.user.repo_manager import setup_gitea_webhook
+        from src.api.deps import get_user_gitea_credential
+        from src.api.session_store import ensure_default_agent_sessions
+        repo_key = to_repo_key(body.full_name, provider="gitea")
+        cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+        base = cred.get("base_url") if cred else ""
+        try:
+            hook_id = setup_gitea_webhook(api_token, owner, repo_name, webhook_url, base_url=base)
+            from src.api.onboarding import cleanup_stale_repo_data
+            cleanup_stale_repo_data(repo_key)
+            user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, org_id=_org_id)
+            user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
+            ensure_default_agent_sessions(repo_key)
+            return {"message": "Gitea 仓库托管成功", "webhook_id": hook_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"托管失败: {e}"})
+
+    # ===== GitLab 仓库托管 =====
+    if provider == "gitlab":
+        from src.user.repo_manager import setup_gitlab_webhook
+        from src.api.deps import get_user_gitlab_credential
+        from src.api.session_store import ensure_default_agent_sessions
+        repo_key = to_repo_key(body.full_name, provider="gitlab")
+        cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
+        base = cred.get("base_url") if cred else ""
+        try:
+            hook_id = setup_gitlab_webhook(api_token, body.full_name, webhook_url, base_url=base)
+            from src.api.onboarding import cleanup_stale_repo_data
+            cleanup_stale_repo_data(repo_key)
+            user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, org_id=_org_id)
+            user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
+            ensure_default_agent_sessions(repo_key)
+            return {"message": "GitLab 项目托管成功", "webhook_id": hook_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=502, detail={"code": 502, "message": f"托管失败: {e}"})
 
     # ===== GitHub 仓库托管 =====
     if provider == "github":

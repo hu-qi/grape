@@ -1578,6 +1578,56 @@ def get_user_github_token(user_id: int) -> str:
     return ""
 
 
+def get_user_gitlab_credential(user_id_or_username, instance_id: str = "") -> dict | None:
+    """获取用户的 GitLab 登录凭据（包含 token, base_url, instance 等）"""
+    uid = user_id_or_username
+    if isinstance(uid, str):
+        u = get_user_by_username(uid)
+        uid = u["id"] if u else 0
+    if not uid or uid <= 0:
+        return None
+    if instance_id:
+        cred = get_credential(uid, f"gitlab_login_{instance_id}")
+        if cred and cred.get("token"):
+            return cred
+    cred = get_credential(uid, "gitlab_login")
+    if cred and cred.get("token"):
+        if not instance_id or cred.get("instance") == instance_id:
+            return cred
+    return cred if cred and cred.get("token") else None
+
+
+def get_user_gitlab_token(user_id_or_username, instance_id: str = "") -> str:
+    """获取用户的 GitLab API token"""
+    cred = get_user_gitlab_credential(user_id_or_username, instance_id=instance_id)
+    return cred.get("token", "") if cred else ""
+
+
+def get_user_gitea_credential(user_id_or_username, instance_id: str = "") -> dict | None:
+    """获取用户的 Gitea 登录凭据（包含 token, base_url, instance 等）"""
+    uid = user_id_or_username
+    if isinstance(uid, str):
+        u = get_user_by_username(uid)
+        uid = u["id"] if u else 0
+    if not uid or uid <= 0:
+        return None
+    if instance_id:
+        cred = get_credential(uid, f"gitea_login_{instance_id}")
+        if cred and cred.get("token"):
+            return cred
+    cred = get_credential(uid, "gitea_login")
+    if cred and cred.get("token"):
+        if not instance_id or cred.get("instance") == instance_id:
+            return cred
+    return cred if cred and cred.get("token") else None
+
+
+def get_user_gitea_token(user_id_or_username, instance_id: str = "") -> str:
+    """获取用户的 Gitea API token"""
+    cred = get_user_gitea_credential(user_id_or_username, instance_id=instance_id)
+    return cred.get("token", "") if cred else ""
+
+
 def _get_username_by_id(user_id: int) -> str:
     """根据 user_id 查 username。"""
     with db_lock:

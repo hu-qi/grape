@@ -124,3 +124,5 @@ src/api/static/uploads/
 # git askpass credential script (outputs token env vars, must not be committed)
 .git-askpass.sh
 venv/
+.atomcode/
+

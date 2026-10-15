@@ -488,7 +488,8 @@ def gitlab_token_login(body: GitlabTokenLogin, response: Response):
     try:
         user_response = requests.get(config['base_url'] + '/api/v4/user',
                                      headers={'PRIVATE-TOKEN': supplied},
-                                     timeout=15, allow_redirects=False)
+                                     timeout=15, allow_redirects=False,
+                                     verify=False)
         if user_response.status_code in (401, 403):
             # 400 而非 401：前端 API 层对 401 触发 JWT refresh/跳登录，会掩盖真实错误
             raise HTTPException(400, detail={'message': 'GitLab Token 无效或已过期'})
@@ -498,20 +499,24 @@ def gitlab_token_login(body: GitlabTokenLogin, response: Response):
             raise ValueError('Missing user identity')
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         # Upstream errors may contain codes/tokens; never put them in logs or URLs.
-        log.warning('GitLab token login upstream failed for instance=%s', config['id'])
+        log.warning('GitLab token login upstream failed for instance=%s: %s', config['id'], type(exc).__name__)
         raise HTTPException(502, detail={'message': 'GitLab 实例连接失败，请检查实例地址与网络后重试'})
     allowed = config.get('allowed_usernames', [])
     if allowed and profile['username'] not in allowed:
         raise HTTPException(403, detail={'message': '此 GitLab 账号不在该实例的登录白名单内'})
     user = resolve_user(config['base_url'], profile)
-    # Login-only scope: do not retain the token; same identity payload as OAuth.
-    if not user_db.set_credential(user['id'], 'gitlab_login', {
-        'base_url': config['base_url'], 'gitlab_user_id': str(profile['id']),
-        'username': profile['username'], 'instance': config['id'],
-    }):
+    cred_data = {
+        'base_url': config['base_url'],
+        'gitlab_user_id': str(profile['id']),
+        'username': profile['username'],
+        'instance': config['id'],
+        'token': supplied,
+    }
+    if not user_db.set_credential(user['id'], 'gitlab_login', cred_data):
         raise HTTPException(500, detail={'message': '保存 GitLab 登录身份失败'})
+    user_db.set_credential(user['id'], f"gitlab_login_{config['id']}", cred_data)
     account = user_db.get_user_account(user['username']) or {}
     account['nickname'] = profile.get('name') or profile['username']
     user_db.save_user_account(user['username'], account)
@@ -580,7 +585,7 @@ def gitlab_oauth_callback(request: Request, code: str = '', state: str = '', err
             'grant_type': 'authorization_code', 'client_id': config['client_id'],
             'client_secret': config['client_secret'], 'redirect_uri': saved['redirect_uri'],
             'code': code, 'code_verifier': saved['verifier'],
-        }, timeout=15, allow_redirects=False)
+        }, timeout=15, allow_redirects=False, verify=False)
         token_response.raise_for_status()
         token_data = token_response.json()
         access_token = token_data.get('access_token', '')
@@ -588,25 +593,29 @@ def gitlab_oauth_callback(request: Request, code: str = '', state: str = '', err
             raise ValueError('Missing access token')
         user_response = requests.get(config['base_url'] + '/api/v4/user',
                                      headers={'Authorization': 'Bearer ' + access_token},
-                                     timeout=15, allow_redirects=False)
+                                     timeout=15, allow_redirects=False, verify=False)
         user_response.raise_for_status()
         profile = user_response.json()
         if not profile.get('id') or not profile.get('username'):
             raise ValueError('Missing user identity')
-    except Exception:
+    except Exception as exc:
         # Upstream errors may contain codes/tokens; never put them in logs or URLs.
-        log.warning('GitLab OAuth upstream exchange failed for instance=%s', config['id'])
+        log.warning('GitLab OAuth upstream exchange failed for instance=%s: %s', config['id'], type(exc).__name__)
         return _oauth_error_redirect(request, 'GitLab 登录失败，请检查应用配置、证书与网络后重试')
     allowed = config.get('allowed_usernames', [])
     if allowed and profile['username'] not in allowed:
         return _oauth_error_redirect(request, '此 GitLab 账号不在该实例的登录白名单内')
     user = resolve_user(config['base_url'], profile)
-    # Login-only scope: do not retain upstream tokens or inject them into agents.
-    if not user_db.set_credential(user['id'], 'gitlab_login', {
-        'base_url': config['base_url'], 'gitlab_user_id': str(profile['id']),
-        'username': profile['username'], 'instance': config['id'],
-    }):
+    cred_data = {
+        'base_url': config['base_url'],
+        'gitlab_user_id': str(profile['id']),
+        'username': profile['username'],
+        'instance': config['id'],
+        'token': access_token,
+    }
+    if not user_db.set_credential(user['id'], 'gitlab_login', cred_data):
         raise HTTPException(500, detail={'message': '保存 GitLab 登录身份失败'})
+    user_db.set_credential(user['id'], f"gitlab_login_{config['id']}", cred_data)
     account = user_db.get_user_account(user['username']) or {}
     account['nickname'] = profile.get('name') or profile['username']
     user_db.save_user_account(user['username'], account)
@@ -670,7 +679,8 @@ def gitea_token_login(body: GiteaTokenLogin, response: Response):
             config['base_url'].rstrip('/') + '/api/v1/user',
             headers={'Authorization': f'token {supplied}', 'Accept': 'application/json'},
             timeout=15,
-            allow_redirects=False
+            allow_redirects=False,
+            verify=False
         )
         if user_response.status_code in (401, 403):
             raise HTTPException(400, detail={'message': 'Gitea Token 无效或已过期'})
@@ -680,8 +690,8 @@ def gitea_token_login(body: GiteaTokenLogin, response: Response):
             raise ValueError('Missing user identity')
     except HTTPException:
         raise
-    except Exception:
-        log.warning('Gitea token login upstream failed for instance=%s', config['id'])
+    except Exception as exc:
+        log.warning('Gitea token login upstream failed for instance=%s: %s', config['id'], type(exc).__name__)
         raise HTTPException(502, detail={'message': 'Gitea 实例连接失败，请检查实例地址与网络后重试'})
 
     allowed = config.get('allowed_usernames', [])
@@ -689,11 +699,16 @@ def gitea_token_login(body: GiteaTokenLogin, response: Response):
         raise HTTPException(403, detail={'message': '此 Gitea 账号不在该实例的登录白名单内'})
 
     user = resolve_user(config['base_url'], profile)
-    if not user_db.set_credential(user['id'], 'gitea_login', {
-        'base_url': config['base_url'], 'gitea_user_id': str(profile['id']),
-        'username': profile['login'], 'instance': config['id'],
-    }):
+    cred_data = {
+        'base_url': config['base_url'],
+        'gitea_user_id': str(profile['id']),
+        'username': profile['login'],
+        'instance': config['id'],
+        'token': supplied,
+    }
+    if not user_db.set_credential(user['id'], 'gitea_login', cred_data):
         raise HTTPException(500, detail={'message': '保存 Gitea 登录身份失败'})
+    user_db.set_credential(user['id'], f"gitea_login_{config['id']}", cred_data)
     account = user_db.get_user_account(user['username']) or {}
     account['nickname'] = profile.get('full_name') or profile.get('name') or profile['login']
     user_db.save_user_account(user['username'], account)
@@ -773,7 +788,7 @@ def gitea_oauth_callback(request: Request, code: str = '', state: str = '', erro
             'grant_type': 'authorization_code', 'client_id': config['client_id'],
             'client_secret': config['client_secret'], 'redirect_uri': saved['redirect_uri'],
             'code': code, 'code_verifier': saved['verifier'],
-        }, headers={'Accept': 'application/json'}, timeout=15, allow_redirects=False)
+        }, headers={'Accept': 'application/json'}, timeout=15, allow_redirects=False, verify=False)
         token_response.raise_for_status()
         token_data = token_response.json()
         access_token = token_data.get('access_token', '')
@@ -782,7 +797,7 @@ def gitea_oauth_callback(request: Request, code: str = '', state: str = '', erro
         user_response = requests.get(config['base_url'] + '/api/v1/user',
                                      headers={'Authorization': 'token ' + access_token,
                                               'Accept': 'application/json'},
-                                     timeout=15, allow_redirects=False)
+                                     timeout=15, allow_redirects=False, verify=False)
         user_response.raise_for_status()
         profile = user_response.json()
         if not profile.get('id') or not (profile.get('username') or profile.get('login')):
@@ -790,18 +805,23 @@ def gitea_oauth_callback(request: Request, code: str = '', state: str = '', erro
         # Gitea 的 username 字段在 /api/v1/user 中通常为 username 或 login
         uname = profile.get('username') or profile.get('login')
         profile['username'] = uname
-    except Exception:
-        log.warning('Gitea OAuth upstream exchange failed for instance=%s', config['id'])
+    except Exception as exc:
+        log.warning('Gitea OAuth upstream exchange failed for instance=%s: %s', config['id'], type(exc).__name__)
         return _oauth_error_redirect(request, 'Gitea 登录失败，请检查应用配置、证书与网络后重试')
     allowed = config.get('allowed_usernames', [])
     if allowed and profile['username'] not in allowed:
         return _oauth_error_redirect(request, '此 Gitea 账号不在该实例的登录白名单内')
     user = resolve_user(config['base_url'], profile)
-    if not user_db.set_credential(user['id'], 'gitea_login', {
-        'base_url': config['base_url'], 'gitea_user_id': str(profile['id']),
-        'username': profile['username'], 'instance': config['id'],
-    }):
+    cred_data = {
+        'base_url': config['base_url'],
+        'gitea_user_id': str(profile['id']),
+        'username': profile['username'],
+        'instance': config['id'],
+        'token': access_token,
+    }
+    if not user_db.set_credential(user['id'], 'gitea_login', cred_data):
         raise HTTPException(500, detail={'message': '保存 Gitea 登录身份失败'})
+    user_db.set_credential(user['id'], f"gitea_login_{config['id']}", cred_data)
     account = user_db.get_user_account(user['username']) or {}
     account['nickname'] = profile.get('full_name') or profile['username']
     user_db.save_user_account(user['username'], account)
