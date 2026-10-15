@@ -454,6 +454,7 @@ def gitlab_login_instances():
         id=item.get('id', ''),
         name=item.get('name', ''),
         base_url=item.get('base_url', ''),
+        auth_mode=item.get('auth_mode', 'token' if item.get('allow_token_login') else 'oauth'),
         allow_token_login=bool(item.get('allow_token_login', False)),
         oauth_ready=bool(item.get('client_id') and item.get('client_secret') and item.get('redirect_uri'))
     ) for item in instances]}
@@ -644,6 +645,7 @@ def gitea_instances():
             id=x.get('id', ''),
             name=x.get('name', ''),
             base_url=x.get('base_url', ''),
+            auth_mode=x.get('auth_mode', 'token' if x.get('allow_token_login') else 'oauth'),
             allow_token_login=bool(x.get('allow_token_login', False)),
             oauth_ready=bool(x.get('client_id') and x.get('client_secret') and x.get('redirect_uri'))
         ) for x in instances]

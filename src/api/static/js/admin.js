@@ -92,35 +92,59 @@
     _gitlabInstances.forEach(function (inst, idx) {
       var itemDiv = document.createElement('div');
       itemDiv.style.cssText = 'border:1px solid #e3e6ee;border-radius:8px;padding:12px;margin-bottom:10px;background:#fcfdfe;';
+      var authMode = inst.auth_mode || (inst.enabled === false ? 'none' : (inst.allow_token_login ? 'token' : 'oauth'));
       itemDiv.innerHTML = [
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">',
         '  <b style="font-size:13px;color:var(--t)">实例 #' + (idx + 1) + ' (' + (inst.id || '新建') + ')</b>',
         '  <button type="button" class="s-btn" style="color:var(--r);border-color:#f3c2c2" onclick="removeGitlabInstanceRow(' + idx + ')">删除</button>',
         '</div>',
-        '<div class="f-row"><label style="width:140px">ID (唯一标识)</label><input class="gl_id" value="' + (inst.id || '') + '" placeholder="如 private 或 cndatacom"></div>',
-        '<div class="f-row"><label style="width:140px">名称 (显示名)</label><input class="gl_name" value="' + (inst.name || '') + '" placeholder="如 研发中心 GitLab"></div>',
+        '<div class="f-row"><label style="width:140px">ID (唯一标识)</label><input class="gl_id" value="' + (inst.id || '') + '" placeholder="如 official 或 cndatacom"></div>',
+        '<div class="f-row"><label style="width:140px">名称 (显示名)</label><input class="gl_name" value="' + (inst.name || '') + '" placeholder="如 研发中心 GitLab 或 GitLab.com"></div>',
         '<div class="f-row"><label style="width:140px">Base URL</label><input class="gl_base_url" value="' + (inst.base_url || '') + '" placeholder="如 https://gitlab.devops.cndatacom.com"></div>',
-        '<div class="f-row"><label style="width:140px">Client ID</label><input class="gl_client_id" value="' + (inst.client_id || '') + '" placeholder="GitLab OAuth Application ID"></div>',
-        '<div class="f-row"><label style="width:140px">Client Secret</label><input class="gl_client_secret" type="password" placeholder="' + (inst.client_secret_present ? '● 已配置（留空保持不变）' : 'GitLab OAuth Secret') + '"></div>',
-        '<div class="f-row"><label style="width:140px">Redirect URI</label><input class="gl_redirect_uri" value="' + (inst.redirect_uri || '') + '" placeholder="如 https://your-domain/api/auth/callback/gitlab"></div>',
-        '<div class="f-row"><label style="width:140px">启用登录</label><input type="checkbox" class="gl_enabled" ' + (inst.enabled !== false ? 'checked' : '') + ' style="width:auto"></div>',
-        '<div class="f-row"><label style="width:140px">Token 登录</label><input type="checkbox" class="gl_allow_token" ' + (inst.allow_token_login ? 'checked' : '') + ' style="width:auto" title="开启后无需 OAuth 应用，用户可直接用 GitLab 个人访问令牌登录"></div>',
+        '<div class="f-row"><label style="width:140px">认证登录模式</label>',
+        '  <div style="display:flex;gap:16px;align-items:center;font-size:13px">',
+        '    <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="radio" name="gl_auth_mode_' + idx + '" value="none" ' + (authMode === 'none' ? 'checked' : '') + ' onchange="toggleGitlabAuthSection(' + idx + ')"> 未启用</label>',
+        '    <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="radio" name="gl_auth_mode_' + idx + '" value="oauth" ' + (authMode === 'oauth' ? 'checked' : '') + ' onchange="toggleGitlabAuthSection(' + idx + ')"> OAuth 登录</label>',
+        '    <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="radio" name="gl_auth_mode_' + idx + '" value="token" ' + (authMode === 'token' ? 'checked' : '') + ' onchange="toggleGitlabAuthSection(' + idx + ')"> Token 登录 / 系统凭据</label>',
+        '  </div>',
+        '</div>',
+        '<div id="gl_oauth_sec_' + idx + '" style="display:' + (authMode === 'oauth' ? 'block' : 'none') + '">',
+        '  <div class="f-row"><label style="width:140px">Client ID</label><input class="gl_client_id" value="' + (inst.client_id || '') + '" placeholder="GitLab OAuth Application ID"></div>',
+        '  <div class="f-row"><label style="width:140px">Client Secret</label><input class="gl_client_secret" type="password" placeholder="' + (inst.client_secret_present ? '● 已配置（留空保持不变）' : 'GitLab OAuth Secret') + '"></div>',
+        '  <div class="f-row"><label style="width:140px">Redirect URI</label><input class="gl_redirect_uri" value="' + (inst.redirect_uri || '') + '" placeholder="如 https://your-domain/api/auth/callback/gitlab"></div>',
+        '</div>',
+        '<div id="gl_token_sec_' + idx + '" style="display:' + (authMode === 'token' ? 'block' : 'none') + '">',
+        '  <div class="f-row"><label style="width:140px">系统 Access Token</label><input class="gl_token" type="password" placeholder="' + (inst.token_present ? '● 已配置（留空保持不变）' : '用于该实例的仓库同步或兜底') + '">',
+        '    <button type="button" class="s-btn" onclick="verifyInstanceToken(\'gitlab\', ' + idx + ')" style="margin-left:8px">校验 Token</button><span id="s_gl_token_' + idx + '" style="margin-left:8px;font-size:12px;color:var(--t2)"></span>',
+        '  </div>',
+        '  <div style="font-size:12px;color:var(--t3);margin-left:140px;margin-bottom:8px">可配置系统级 Bot Token（提供全局拉取仓库兜底），普通用户亦可在登录页输入各自的 PAT。</div>',
+        '</div>',
         '<div class="f-row"><label style="width:140px">用户白名单</label><input class="gl_allowed_usernames" value="' + ((inst.allowed_usernames || []).join(', ')) + '" placeholder="逗号分隔，留空表示允许所有人"></div>'
       ].join('');
       container.appendChild(itemDiv);
     });
   }
 
+  window.toggleGitlabAuthSection = function (idx) {
+    var radios = document.getElementsByName('gl_auth_mode_' + idx);
+    var val = 'none';
+    for (var i = 0; i < radios.length; i++) { if (radios[i].checked) { val = radios[i].value; break; } }
+    var oSec = $2('gl_oauth_sec_' + idx);
+    var tSec = $2('gl_token_sec_' + idx);
+    if (oSec) oSec.style.display = (val === 'oauth' ? 'block' : 'none');
+    if (tSec) tSec.style.display = (val === 'token' ? 'block' : 'none');
+  };
+
   function addGitlabInstanceRow() {
     _gitlabInstances.push({
       id: 'gl_' + Date.now().toString(36),
       name: '',
       base_url: '',
+      auth_mode: 'oauth',
       client_id: '',
       client_secret: '',
       redirect_uri: window.location.origin + '/api/auth/callback/gitlab',
-      enabled: true,
-      allow_token_login: false,
+      token: '',
       allowed_usernames: []
     });
     renderGitlabInstances();
@@ -144,6 +168,7 @@
     _giteaInstances.forEach(function (inst, idx) {
       var itemDiv = document.createElement('div');
       itemDiv.style.cssText = 'border:1px solid #e3e6ee;border-radius:8px;padding:12px;margin-bottom:10px;background:#fcfdfe;';
+      var authMode = inst.auth_mode || (inst.enabled === false ? 'none' : (inst.allow_token_login ? 'token' : 'oauth'));
       itemDiv.innerHTML = [
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">',
         '  <b style="font-size:13px;color:var(--t)">实例 #' + (idx + 1) + ' (' + (inst.id || '新建') + ')</b>',
@@ -152,27 +177,50 @@
         '<div class="f-row"><label style="width:140px">ID (唯一标识)</label><input class="gt_id" value="' + (inst.id || '') + '" placeholder="如 official 或 private_gitea"></div>',
         '<div class="f-row"><label style="width:140px">名称 (显示名)</label><input class="gt_name" value="' + (inst.name || '') + '" placeholder="如 研发 Gitea 或 Gitea.com"></div>',
         '<div class="f-row"><label style="width:140px">Base URL</label><input class="gt_base_url" value="' + (inst.base_url || '') + '" placeholder="如 http://172.16.145.202:30344"></div>',
-        '<div class="f-row"><label style="width:140px">Client ID</label><input class="gt_client_id" value="' + (inst.client_id || '') + '" placeholder="Gitea OAuth Application Client ID"></div>',
-        '<div class="f-row"><label style="width:140px">Client Secret</label><input class="gt_client_secret" type="password" placeholder="' + (inst.client_secret_present ? '● 已配置（留空保持不变）' : 'Gitea OAuth Client Secret') + '"></div>',
-        '<div class="f-row"><label style="width:140px">Redirect URI</label><input class="gt_redirect_uri" value="' + (inst.redirect_uri || '') + '" placeholder="如 http://your-domain/api/auth/callback/gitea"></div>',
-        '<div class="f-row"><label style="width:140px">启用登录</label><input type="checkbox" class="gt_enabled" ' + (inst.enabled !== false ? 'checked' : '') + ' style="width:auto"></div>',
-        '<div class="f-row"><label style="width:140px">Token 登录</label><input type="checkbox" class="gt_allow_token" ' + (inst.allow_token_login ? 'checked' : '') + ' style="width:auto" title="开启后无需 OAuth 应用，用户可直接用 Gitea 个人访问令牌登录"></div>',
+        '<div class="f-row"><label style="width:140px">认证登录模式</label>',
+        '  <div style="display:flex;gap:16px;align-items:center;font-size:13px">',
+        '    <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="radio" name="gt_auth_mode_' + idx + '" value="none" ' + (authMode === 'none' ? 'checked' : '') + ' onchange="toggleGiteaAuthSection(' + idx + ')"> 未启用</label>',
+        '    <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="radio" name="gt_auth_mode_' + idx + '" value="oauth" ' + (authMode === 'oauth' ? 'checked' : '') + ' onchange="toggleGiteaAuthSection(' + idx + ')"> OAuth 登录</label>',
+        '    <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="radio" name="gt_auth_mode_' + idx + '" value="token" ' + (authMode === 'token' ? 'checked' : '') + ' onchange="toggleGiteaAuthSection(' + idx + ')"> Token 登录 / 系统凭据</label>',
+        '  </div>',
+        '</div>',
+        '<div id="gt_oauth_sec_' + idx + '" style="display:' + (authMode === 'oauth' ? 'block' : 'none') + '">',
+        '  <div class="f-row"><label style="width:140px">Client ID</label><input class="gt_client_id" value="' + (inst.client_id || '') + '" placeholder="Gitea OAuth Application Client ID"></div>',
+        '  <div class="f-row"><label style="width:140px">Client Secret</label><input class="gt_client_secret" type="password" placeholder="' + (inst.client_secret_present ? '● 已配置（留空保持不变）' : 'Gitea OAuth Client Secret') + '"></div>',
+        '  <div class="f-row"><label style="width:140px">Redirect URI</label><input class="gt_redirect_uri" value="' + (inst.redirect_uri || '') + '" placeholder="如 http://your-domain/api/auth/callback/gitea"></div>',
+        '</div>',
+        '<div id="gt_token_sec_' + idx + '" style="display:' + (authMode === 'token' ? 'block' : 'none') + '">',
+        '  <div class="f-row"><label style="width:140px">系统 Access Token</label><input class="gt_token" type="password" placeholder="' + (inst.token_present ? '● 已配置（留空保持不变）' : '用于该实例的仓库同步或兜底') + '">',
+        '    <button type="button" class="s-btn" onclick="verifyInstanceToken(\'gitea\', ' + idx + ')" style="margin-left:8px">校验 Token</button><span id="s_gt_token_' + idx + '" style="margin-left:8px;font-size:12px;color:var(--t2)"></span>',
+        '  </div>',
+        '  <div style="font-size:12px;color:var(--t3);margin-left:140px;margin-bottom:8px">可配置系统级 Bot Token（提供全局拉取仓库兜底），普通用户亦可在登录页输入各自的 PAT。</div>',
+        '</div>',
         '<div class="f-row"><label style="width:140px">用户白名单</label><input class="gt_allowed_usernames" value="' + ((inst.allowed_usernames || []).join(', ')) + '" placeholder="逗号分隔，留空表示允许所有人"></div>'
       ].join('');
       container.appendChild(itemDiv);
     });
   }
 
+  window.toggleGiteaAuthSection = function (idx) {
+    var radios = document.getElementsByName('gt_auth_mode_' + idx);
+    var val = 'none';
+    for (var i = 0; i < radios.length; i++) { if (radios[i].checked) { val = radios[i].value; break; } }
+    var oSec = $2('gt_oauth_sec_' + idx);
+    var tSec = $2('gt_token_sec_' + idx);
+    if (oSec) oSec.style.display = (val === 'oauth' ? 'block' : 'none');
+    if (tSec) tSec.style.display = (val === 'token' ? 'block' : 'none');
+  };
+
   function addGiteaInstanceRow() {
     _giteaInstances.push({
       id: 'gt_' + Date.now().toString(36),
       name: '',
       base_url: '',
+      auth_mode: 'oauth',
       client_id: '',
       client_secret: '',
       redirect_uri: window.location.origin + '/api/auth/callback/gitea',
-      enabled: true,
-      allow_token_login: false,
+      token: '',
       allowed_usernames: []
     });
     renderGiteaInstances();
@@ -266,18 +314,26 @@
       var cid = (row.querySelector('.gl_client_id').value || '').trim();
       var csec = (row.querySelector('.gl_client_secret').value || '').trim();
       var ruri = (row.querySelector('.gl_redirect_uri').value || '').trim();
-      var enabled = row.querySelector('.gl_enabled').checked;
-      var allowToken = row.querySelector('.gl_allow_token').checked;
+      var tok = row.querySelector('.gl_token') ? (row.querySelector('.gl_token').value || '').trim() : '';
+
+      var glRadios = row.querySelectorAll('input[type="radio"][name^="gl_auth_mode_"]');
+      var glAuthMode = 'none';
+      for (var rIdx = 0; rIdx < glRadios.length; rIdx++) {
+        if (glRadios[rIdx].checked) { glAuthMode = glRadios[rIdx].value; break; }
+      }
+
       var allowed = (row.querySelector('.gl_allowed_usernames').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
       glList.push({
         id: key,
         name: name || key,
         base_url: base,
+        auth_mode: glAuthMode,
+        enabled: (glAuthMode !== 'none'),
+        allow_token_login: (glAuthMode === 'token'),
         client_id: cid,
         client_secret: csec, // 若留空，后端会保留 previous_item 的 secret
         redirect_uri: ruri,
-        enabled: enabled,
-        allow_token_login: allowToken,
+        token: tok,           // 若留空，后端会保留 previous_item 的 token
         allowed_usernames: allowed
       });
     }
@@ -296,18 +352,26 @@
       var gtCid = (gtRow.querySelector('.gt_client_id').value || '').trim();
       var gtCsec = (gtRow.querySelector('.gt_client_secret').value || '').trim();
       var gtRuri = (gtRow.querySelector('.gt_redirect_uri').value || '').trim();
-      var gtEnabled = gtRow.querySelector('.gt_enabled').checked;
-      var gtAllowToken = gtRow.querySelector('.gt_allow_token') ? gtRow.querySelector('.gt_allow_token').checked : false;
+      var gtTok = gtRow.querySelector('.gt_token') ? (gtRow.querySelector('.gt_token').value || '').trim() : '';
+
+      var gtRadios = gtRow.querySelectorAll('input[type="radio"][name^="gt_auth_mode_"]');
+      var gtAuthMode = 'none';
+      for (var gIdx = 0; gIdx < gtRadios.length; gIdx++) {
+        if (gtRadios[gIdx].checked) { gtAuthMode = gtRadios[gIdx].value; break; }
+      }
+
       var gtAllowed = (gtRow.querySelector('.gt_allowed_usernames').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
       gtList.push({
         id: gtKey,
         name: gtName || gtKey,
         base_url: gtBase,
+        auth_mode: gtAuthMode,
+        enabled: (gtAuthMode !== 'none'),
+        allow_token_login: (gtAuthMode === 'token'),
         client_id: gtCid,
         client_secret: gtCsec,
         redirect_uri: gtRuri,
-        enabled: gtEnabled,
-        allow_token_login: gtAllowToken,
+        token: gtTok,
         allowed_usernames: gtAllowed
       });
     }
@@ -330,6 +394,35 @@
     }).catch(function (e) { toast('校验失败: ' + e.message, false); });
   }
 
+  function verifyInstanceToken(provider, idx) {
+    var prefix = provider === 'gitlab' ? 'gl' : 'gt';
+    var containerId = provider === 'gitlab' ? 'gitlab_instances_container' : 'gitea_instances_container';
+    var rows = document.querySelectorAll('#' + containerId + ' > div');
+    if (!rows[idx]) return;
+    var row = rows[idx];
+    var tok = (row.querySelector('.' + prefix + '_token').value || '').trim();
+    var base = (row.querySelector('.' + prefix + '_base_url').value || '').trim();
+    var st = document.getElementById('s_' + prefix + '_token_' + idx);
+    if (!tok) {
+      if (st) st.textContent = '请先输入 Token';
+      toast('请先填入 Token 再校验', false);
+      return;
+    }
+    if (st) st.textContent = '校验中...';
+    api('/config/verify-token', { method: 'POST', body: { provider: provider, token: tok, base_url: base } }).then(function (d) {
+      if (d.ok) {
+        if (st) { st.style.color = 'var(--g, #107c10)'; st.textContent = '✔ ' + (d.login || d.name); }
+        toast(provider.toUpperCase() + ' Token 有效: ' + (d.login || d.name), true);
+      } else {
+        if (st) { st.style.color = 'var(--r, #dc2828)'; st.textContent = '✗ 无效'; }
+        toast('Token 无效或权限不足', false);
+      }
+    }).catch(function (e) {
+      if (st) { st.style.color = 'var(--r, #dc2828)'; st.textContent = '✗ ' + e.message; }
+      toast('校验失败: ' + e.message, false);
+    });
+  }
+
   // ====== 初始化 ======
   function init() {
     $2('loginBtn').onclick = login;
@@ -340,6 +433,7 @@
 
   window.AdminApp = { login: login, changePwd: changePwd, closePwdModal: closePwdModal, openPwdModal: openPwdModal,
                       logout: logout, showCfg: showCfg, saveConfig: saveConfig, verifyToken: verifyToken,
+                      verifyInstanceToken: verifyInstanceToken,
                       renderGitlabInstances: renderGitlabInstances, addGitlabInstanceRow: addGitlabInstanceRow,
                       removeGitlabInstanceRow: removeGitlabInstanceRow,
                       renderGiteaInstances: renderGiteaInstances, addGiteaInstanceRow: addGiteaInstanceRow,
@@ -353,6 +447,7 @@
   window.showCfg = showCfg;
   window.saveConfig = saveConfig;
   window.verifyToken = verifyToken;
+  window.verifyInstanceToken = verifyInstanceToken;
   window.renderGitlabInstances = renderGitlabInstances;
   window.addGitlabInstanceRow = addGitlabInstanceRow;
   window.removeGitlabInstanceRow = removeGitlabInstanceRow;

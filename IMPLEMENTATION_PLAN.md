@@ -51,5 +51,15 @@
 **Tests**: Unit tests in `test_gitlab_login.py`, `test_gitea_login.py`, and `test_gitea_gitlab_repos.py`.
 **Status**: Completed
 
+## Stage 8: Mutually exclusive auth mode (none/oauth/token), Admin-level Token configuration, and Login UI multi-instance recognition
+**Goal**: Standardize GitLab and Gitea instance configuration into three mutually exclusive authentication modes (`none`, `oauth`, `token`), allow configuring system-level tokens in Admin for platform-wide repository synchronization fallback, and enhance the login modal to intelligently distinguish official vs. self-hosted instances with corresponding authentication badges.
+**Success Criteria**:
+- Backend configuration schemas (`gitlab_config.py`, `gitea_config.py`) support `auth_mode: 'none' | 'oauth' | 'token'` and `token` storage with backward compatibility.
+- Admin dashboard (`admin.js`, `admin.py`, `config_store.py`) provides radio selection for authentication mode, dynamic section display, and on-the-fly instance token verification.
+- `_get_user_provider_and_token` and `_fetch_and_cache` fall back to the Admin-configured instance token when a user has no personal PAT bound.
+- Login page (`app.js`) multi-instance modal displays "Official / 私有实例" and "OAuth / Token" badges for clear operator and user guidance.
+**Tests**: Regression test suite `tests/test_gitlab_login.py`, `tests/test_gitea_login.py`, `tests/test_gitea_gitlab_repos.py` (40 passed).
+**Status**: Completed
+
 
 

@@ -206,3 +206,28 @@ def test_token_login_upstream_failure_is_sanitized(configured):
                             json={'instance': 'tok', 'token': 'glpat-abcdefghij1234567890'})
     assert r.status_code == 502
     assert 'glpat-secret-value' not in r.text
+
+
+def test_auth_mode_token_saves_and_persists_token(configured):
+    config_store.save_config({
+        'gitlab_mode': 'single',
+        'gitlab_default_instance': 'tok_inst',
+        'gitlab_instances': [dict(
+            id='tok_inst',
+            name='Token GitLab',
+            base_url='https://gitlab.example.test',
+            auth_mode='token',
+            token='glpat-12345678901234567890',
+            allowed_usernames=[]
+        )]
+    })
+    cfg = config_store.load_config()
+    inst = cfg['gitlab_instances'][0]
+    assert inst['auth_mode'] == 'token'
+    assert inst['allow_token_login'] is True
+    assert inst['token'] == 'glpat-12345678901234567890'
+
+    pub = config_store.read_public_config()
+    pub_inst = pub['gitlab_instances'][0]
+    assert pub_inst['token_present'] is True
+    assert 'token' not in pub_inst

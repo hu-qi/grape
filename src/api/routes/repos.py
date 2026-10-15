@@ -49,11 +49,25 @@ def _get_user_provider_and_token(username: str, login_provider: str = "", login_
         gitea_token = get_user_gitea_token(username, instance_id=login_instance)
         if gitea_token:
             return "gitea", gitea_token
+        # 兜底：若用户未绑定个人 token，回退尝试使用 Admin 配置的实例 Token
+        from src.admin.config_store import load_config
+        cfg = load_config()
+        inst_key = login_instance or cfg.get('gitea_default_instance', '')
+        for inst in cfg.get('gitea_instances', []):
+            if inst.get('id') == inst_key and inst.get('token'):
+                return "gitea", inst['token']
     elif login_provider == "gitlab":
         from src.api.deps import get_user_gitlab_token
         gitlab_token = get_user_gitlab_token(username, instance_id=login_instance)
         if gitlab_token:
             return "gitlab", gitlab_token
+        # 兜底：若用户未绑定个人 token，回退尝试使用 Admin 配置的实例 Token
+        from src.admin.config_store import load_config
+        cfg = load_config()
+        inst_key = login_instance or cfg.get('gitlab_default_instance', '')
+        for inst in cfg.get('gitlab_instances', []):
+            if inst.get('id') == inst_key and inst.get('token'):
+                return "gitlab", inst['token']
 
     # 兜底优先级：github -> gitea -> gitlab -> gitcode
     github_token = get_user_github_token(username)
@@ -66,6 +80,17 @@ def _get_user_provider_and_token(username: str, login_provider: str = "", login_
     gitlab_token = get_user_gitlab_token(username, instance_id=login_instance)
     if gitlab_token:
         return "gitlab", gitlab_token
+
+    # 再次检查 Admin 配置的默认实例 Token 兜底
+    from src.admin.config_store import load_config
+    cfg = load_config()
+    for inst in cfg.get('gitea_instances', []):
+        if inst.get('token') and inst.get('auth_mode') != 'none':
+            return "gitea", inst['token']
+    for inst in cfg.get('gitlab_instances', []):
+        if inst.get('token') and inst.get('auth_mode') != 'none':
+            return "gitlab", inst['token']
+
     gitcode_token = get_user_token(username)
     if gitcode_token:
         return "gitcode", gitcode_token
@@ -86,6 +111,14 @@ def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode", us
         from src.api.deps import get_user_gitea_credential
         cred = get_user_gitea_credential(user_id or username, instance_id=login_instance)
         base_url = cred.get("base_url", "") if cred else ""
+        if not base_url:
+            from src.admin.config_store import load_config
+            cfg = load_config()
+            inst_key = login_instance or cfg.get('gitea_default_instance', '')
+            for inst in cfg.get('gitea_instances', []):
+                if inst.get('id') == inst_key:
+                    base_url = inst.get('base_url', '')
+                    break
         repos = fetch_gitea_repos_with_role(api_token, base_url=base_url)
         for r in repos:
             if not r.get("repo_key"):
@@ -95,6 +128,14 @@ def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode", us
         from src.api.deps import get_user_gitlab_credential
         cred = get_user_gitlab_credential(user_id or username, instance_id=login_instance)
         base_url = cred.get("base_url", "") if cred else ""
+        if not base_url:
+            from src.admin.config_store import load_config
+            cfg = load_config()
+            inst_key = login_instance or cfg.get('gitlab_default_instance', '')
+            for inst in cfg.get('gitlab_instances', []):
+                if inst.get('id') == inst_key:
+                    base_url = inst.get('base_url', '')
+                    break
         repos = fetch_gitlab_repos_with_role(api_token, base_url=base_url)
         for r in repos:
             if not r.get("repo_key"):

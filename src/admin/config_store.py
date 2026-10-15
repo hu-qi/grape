@@ -130,13 +130,16 @@ def save_config(payload: dict) -> dict:
     return read_public_config()
 
 
-def verify_token(provider: str, token: str) -> dict:
+def verify_token(provider: str, token: str, base_url: str = "") -> dict:
     """用 token 调平台 /user 接口校验，返回登录名 + 平台。
 
     - provider=gitcode:  GET https://gitcode.com/api/v5/user
     - provider=github:   GET https://api.github.com/user
+    - provider=gitlab:   GET {base_url}/api/v4/user
+    - provider=gitea:    GET {base_url}/api/v1/user
     """
     import os as _os
+    import requests
     _proxies = None
     _proxy = _os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy") or ""
     if _proxy:
@@ -146,6 +149,23 @@ def verify_token(provider: str, token: str) -> dict:
         user_data = _github_req("GET", "https://api.github.com/user", token)
         login = user_data.get("login", "")
         return {"provider": "github", "login": login, "name": user_data.get("name") or login}
+    elif provider == "gitlab":
+        url = (base_url.rstrip("/") if base_url else "https://gitlab.com") + "/api/v4/user"
+        res = requests.get(url, headers={"PRIVATE-TOKEN": token}, timeout=10, verify=False)
+        if res.status_code != 200:
+            raise ValueError(f"GitLab 返回状态码 {res.status_code}: {res.text[:100]}")
+        user_data = res.json()
+        login = user_data.get("username", "")
+        return {"provider": "gitlab", "login": login, "name": user_data.get("name") or login}
+    elif provider == "gitea":
+        url = (base_url.rstrip("/") if base_url else "https://gitea.com") + "/api/v1/user"
+        res = requests.get(url, headers={"Authorization": f"token {token}"}, timeout=10, verify=False)
+        if res.status_code != 200:
+            raise ValueError(f"Gitea 返回状态码 {res.status_code}: {res.text[:100]}")
+        user_data = res.json()
+        login = user_data.get("login") or user_data.get("username", "")
+        return {"provider": "gitea", "login": login, "name": user_data.get("full_name") or login}
+
     from src.user.repo_manager import _req
     user_data = _req("GET", "https://gitcode.com/api/v5/user", token)
     login = user_data.get("login", "")

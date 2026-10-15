@@ -98,3 +98,36 @@ def test_fetch_gitlab_repos_with_role_mock():
         assert repos[0]["full_name"] == "huqi/grape-ci"
         assert repos[0]["repo_key"] == "gitlab:huqi/grape-ci"
         assert repos[0]["is_admin"] is True
+
+
+def test_admin_token_fallback():
+    """测试当用户没有个人 PAT 时，系统能回退使用 Admin 配置的实例 Token"""
+    mock_config = {
+        "gitea_instances": [
+            {
+                "id": "my_gitea",
+                "auth_mode": "token",
+                "base_url": "http://172.16.145.202:30344",
+                "token": "admin_gitea_token_secret"
+            }
+        ],
+        "gitlab_instances": [
+            {
+                "id": "my_gitlab",
+                "auth_mode": "token",
+                "base_url": "https://gitlab.devops.cndatacom.com:18443",
+                "token": "admin_gitlab_token_secret"
+            }
+        ]
+    }
+    with patch("src.admin.config_store.load_config", return_value=mock_config):
+        # 用户无凭证，入参指定 gitea / my_gitea
+        prov, tok = _get_user_provider_and_token("new_user_no_cred", "gitea", "my_gitea")
+        assert prov == "gitea"
+        assert tok == "admin_gitea_token_secret"
+
+        # 用户无凭证，入参指定 gitlab / my_gitlab
+        prov, tok = _get_user_provider_and_token("new_user_no_cred", "gitlab", "my_gitlab")
+        assert prov == "gitlab"
+        assert tok == "admin_gitlab_token_secret"
+

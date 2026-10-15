@@ -60,8 +60,9 @@ class ConfigBody(BaseModel):
 
 
 class VerifyTokenBody(BaseModel):
-    provider: str  # gitcode | github
+    provider: str  # gitcode | github | gitlab | gitea
     token: str
+    base_url: str = ""
 
 
 @router.post("/login", operation_id="admin_login", summary="Admin login",
@@ -184,13 +185,13 @@ def put_config(body: ConfigBody, admin: dict = Depends(require_admin)):
 @router.post("/config/verify-token", operation_id="admin_config_verify_token",
              summary="Verify platform token", description="Calls platform /user API to validate token and returns username.")
 def verify_platform_token(body: VerifyTokenBody, admin: dict = Depends(require_admin)):
-    if body.provider not in ("gitcode", "github"):
-        raise HTTPException(status_code=400, detail={"code": 400, "message": "provider 必须是 gitcode 或 github"})
+    if body.provider not in ("gitcode", "github", "gitlab", "gitea"):
+        raise HTTPException(status_code=400, detail={"code": 400, "message": "provider 必须是 gitcode、github、gitlab 或 gitea"})
     if not body.token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "token 不能为空"})
     try:
         from src.admin.config_store import verify_token
-        info = verify_token(body.provider, body.token)
+        info = verify_token(body.provider, body.token, base_url=body.base_url)
         return {"ok": bool(info.get("login")), "login": info.get("login", ""), "name": info.get("name", "")}
     except Exception as e:
         raise HTTPException(status_code=400, detail={"code": 400, "message": f"token 校验失败: {str(e)[:200]}"})

@@ -48,19 +48,48 @@ def validate_config(data: dict, previous: dict) -> dict:
             redirect = normalize_url(redirect)
             if not redirect.endswith('/api/auth/callback/gitea'):
                 raise ValueError('Gitea 回调地址必须以 /api/auth/callback/gitea 结尾')
-        entry = dict(id=key, name=item.get('name', '').strip() or key, base_url=base,
-                     client_id=item.get('client_id', '').strip(),
-                     client_secret=item.get('client_secret') or previous_item.get('client_secret', ''),
-                     redirect_uri=redirect, enabled=item.get('enabled', True),
-                     allow_token_login=bool(item.get('allow_token_login', False)),
-                     allowed_usernames=item.get('allowed_usernames', []))
-        if not isinstance(entry['enabled'], bool):
-            raise ValueError('Gitea enabled 必须为布尔值')
+
+        # 认证模式支持：auth_mode = 'none' | 'oauth' | 'token'
+        # 兼容旧字段 enabled(bool) 和 allow_token_login(bool)
+        auth_mode = item.get('auth_mode')
+        if not auth_mode:
+            if not item.get('enabled', True):
+                auth_mode = 'none'
+            elif item.get('allow_token_login'):
+                auth_mode = 'token'
+            else:
+                auth_mode = 'oauth'
+
+        if auth_mode not in ('none', 'oauth', 'token'):
+            raise ValueError('Gitea 认证模式必须为 none、oauth 或 token')
+
+        client_secret = item.get('client_secret') or previous_item.get('client_secret', '')
+        token = item.get('token') or previous_item.get('token', '')
+
+        entry = dict(
+            id=key,
+            name=item.get('name', '').strip() or key,
+            base_url=base,
+            auth_mode=auth_mode,
+            enabled=(auth_mode != 'none'),
+            allow_token_login=(auth_mode == 'token'),
+            client_id=item.get('client_id', '').strip(),
+            client_secret=client_secret,
+            redirect_uri=redirect,
+            token=token,
+            allowed_usernames=item.get('allowed_usernames', [])
+        )
+
         if not isinstance(entry['allowed_usernames'], list) or not all(isinstance(x, str) for x in entry['allowed_usernames']):
             raise ValueError('Gitea 用户白名单必须为字符串列表')
-        if entry['enabled'] and not entry['allow_token_login'] \
-                and not all(entry[k] for k in ('client_id', 'client_secret', 'redirect_uri')):
-            raise ValueError('启用 Gitea 登录前必须填写 Client ID、Secret 和回调地址（或开启 Token 登录）')
+
+        if entry['auth_mode'] == 'oauth':
+            if not all(entry[k] for k in ('client_id', 'client_secret', 'redirect_uri')):
+                raise ValueError('OAuth 模式下必须填写 Client ID、Client Secret 和回调地址')
+        elif entry['auth_mode'] == 'token':
+            # token 模式下可配置系统级 token（供公共兜底拉取），也可由普通用户自行输入 PAT
+            pass
+
         instances.append(entry)
     default = data.get('gitea_default_instance', '')
     if instances and default not in seen:
@@ -71,8 +100,9 @@ def validate_config(data: dict, previous: dict) -> dict:
 def public_config(data: dict) -> dict:
     return dict(gitea_mode=data.get('gitea_mode', 'single'),
                 gitea_default_instance=data.get('gitea_default_instance', ''),
-                gitea_instances=[{**{k: v for k, v in item.items() if k != 'client_secret'},
-                                   'client_secret_present': bool(item.get('client_secret'))}
+                gitea_instances=[{**{k: v for k, v in item.items() if k not in ('client_secret', 'token')},
+                                   'client_secret_present': bool(item.get('client_secret')),
+                                   'token_present': bool(item.get('token'))}
                                   for item in data.get('gitea_instances', [])])
 
 
@@ -80,10 +110,24 @@ def login_instances() -> tuple[str, list[dict]]:
     from src.admin.config_store import load_config
     data = load_config()
     mode = data.get('gitea_mode', 'single')
-    entries = [item for item in data.get('gitea_instances', [])
-               if item.get('enabled')
-               and (all(item.get(k) for k in ('client_id', 'client_secret', 'redirect_uri'))
-                    or item.get('allow_token_login'))]
+    entries = []
+    for item in data.get('gitea_instances', []):
+        auth_mode = item.get('auth_mode')
+        if not auth_mode:
+            # 兼容旧结构
+            if not item.get('enabled', True):
+                auth_mode = 'none'
+            elif item.get('allow_token_login'):
+                auth_mode = 'token'
+            else:
+                auth_mode = 'oauth'
+        if auth_mode == 'none':
+            continue
+        if auth_mode == 'oauth' and all(item.get(k) for k in ('client_id', 'client_secret', 'redirect_uri')):
+            entries.append(item)
+        elif auth_mode == 'token':
+            entries.append(item)
+
     if mode == 'single':
         entries = [item for item in entries if item['id'] == data.get('gitea_default_instance')]
     return mode, entries

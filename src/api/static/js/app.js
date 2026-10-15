@@ -1112,6 +1112,14 @@ function loadAgentTypes() {
     }).catch(e => showToast(e?.detail?.message || I18N.t('app.login.oauth_not_configured')));
   }
 
+  function isOfficialInstance(provider, url) {
+    if (!url) return false;
+    var u = url.toLowerCase();
+    if (provider === 'gitlab') return u.indexOf('gitlab.com') >= 0;
+    if (provider === 'gitea') return u.indexOf('gitea.com') >= 0;
+    return false;
+  }
+
   function showGitlabInstanceModal(instances) {
     var old = document.getElementById('glInstanceModal');
     if (old) old.remove();
@@ -1120,10 +1128,22 @@ function loadAgentTypes() {
     overlay.id = 'glInstanceModal';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
     var itemsHtml = instances.map(inst => {
-      var action = inst.oauth_ready ? 'oauthLoginGitlab' : 'showGitlabTokenModal';
+      var isOauth = inst.auth_mode === 'oauth' || (!inst.auth_mode && inst.oauth_ready);
+      var action = isOauth ? 'oauthLoginGitlab' : 'showGitlabTokenModal';
+      var isOfficial = isOfficialInstance('gitlab', inst.base_url);
+      var typeTag = isOfficial
+        ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#eef2ff;color:#4f46e5;font-weight:500">' + (isZh ? '官方' : 'Official') + '</span>'
+        : '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#f3f4f6;color:#4b5563;font-weight:500">' + (isZh ? '私有实例' : 'Self-hosted') + '</span>';
+      var modeTag = isOauth
+        ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#ecfdf5;color:#059669;font-weight:500">OAuth</span>'
+        : '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#fffbeb;color:#d97706;font-weight:500">Token</span>';
+
       return '<div class="gl-inst-btn" onclick="app.' + action + '(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
         '<div>' +
-          '<div style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</div>' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
+            '<span style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</span>' +
+            typeTag + modeTag +
+          '</div>' +
           '<div style="font-size:11px;color:var(--t3,#86868b)">' + inst.base_url + '</div>' +
         '</div>' +
         '<span style="font-size:16px;color:var(--a,#3168e0)">→</span>' +
@@ -1131,9 +1151,9 @@ function loadAgentTypes() {
     }).join('');
 
     overlay.innerHTML =
-      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
+      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:420px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitlab_select_title') + '</h3>' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + (isZh ? '选择要登录的 GitLab 实例' : 'Select GitLab Instance') + '</h3>' +
           '<span onclick="document.getElementById(\'glInstanceModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
         '</div>' +
         '<div>' + itemsHtml + '</div>' +
@@ -1144,20 +1164,21 @@ function loadAgentTypes() {
   function showGitlabTokenModal(instanceId) {
     var old = document.getElementById('glTokenModal');
     if (old) old.remove();
+    var isZh = I18N.getLang() === 'zh';
     var overlay = document.createElement('div');
     overlay.id = 'glTokenModal';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
     overlay.innerHTML =
       '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitlab_token_login') + '</h3>' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + (isZh ? 'GitLab Token 登录' : 'GitLab Token Login') + '</h3>' +
           '<span onclick="document.getElementById(\'glTokenModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
         '</div>' +
-        '<input id="glTokenInput" type="password" autocomplete="off" placeholder="' + I18N.t('app.login.gitlab_token_placeholder') + '" style="width:100%;padding:10px 12px;border:1px solid var(--b,#e3e6ee);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">' +
-        '<div style="font-size:12px;color:var(--t3,#86868b);margin-top:8px">' + I18N.t('app.login.gitlab_token_hint') + '</div>' +
+        '<input id="glTokenInput" type="password" autocomplete="off" placeholder="' + (isZh ? '请输入 GitLab 个人访问令牌 (PAT)' : 'Enter GitLab Personal Access Token') + '" style="width:100%;padding:10px 12px;border:1px solid var(--b,#e3e6ee);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">' +
+        '<div style="font-size:12px;color:var(--t3,#86868b);margin-top:8px">' + (isZh ? '权限需勾选 read_user 与 api 作用域' : 'Scope requires read_user and api') + '</div>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
           '<button onclick="document.getElementById(\'glTokenModal\').remove()" style="padding:8px 18px;border:1px solid var(--b,#e3e6ee);border-radius:8px;background:transparent;color:var(--t,#1d1d1f);font-size:13px;cursor:pointer">' + I18N.t('common.cancel') + '</button>' +
-          '<button id="glTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#fc6d26;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + I18N.t('app.login.gitlab_token_confirm') + '</button>' +
+          '<button id="glTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#fc6d26;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + (isZh ? '确认登录' : 'Sign In') + '</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(overlay);
@@ -1165,7 +1186,7 @@ function loadAgentTypes() {
     input.focus();
     function submit() {
       var token = input.value.trim();
-      if (!token) return showToast(I18N.t('app.login.empty_input'));
+      if (!token) return showToast(isZh ? '请输入 Token' : 'Please enter token');
       var btn = document.getElementById('glTokenSubmit');
       btn.disabled = true;
       API.post('/auth/gitlab/token-login', {instance: instanceId || '', token: token}).then(d => {
@@ -1198,10 +1219,22 @@ function loadAgentTypes() {
     overlay.id = 'gtInstanceModal';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
     var itemsHtml = instances.map(inst => {
-      var action = inst.oauth_ready ? 'oauthLoginGitea' : 'showGiteaTokenModal';
+      var isOauth = inst.auth_mode === 'oauth' || (!inst.auth_mode && inst.oauth_ready);
+      var action = isOauth ? 'oauthLoginGitea' : 'showGiteaTokenModal';
+      var isOfficial = isOfficialInstance('gitea', inst.base_url);
+      var typeTag = isOfficial
+        ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#eef2ff;color:#4f46e5;font-weight:500">' + (isZh ? '官方' : 'Official') + '</span>'
+        : '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#f3f4f6;color:#4b5563;font-weight:500">' + (isZh ? '私有实例' : 'Self-hosted') + '</span>';
+      var modeTag = isOauth
+        ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#ecfdf5;color:#059669;font-weight:500">OAuth</span>'
+        : '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#fffbeb;color:#d97706;font-weight:500">Token</span>';
+
       return '<div class="gt-inst-btn" onclick="app.' + action + '(\'' + inst.id + '\')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--b,#e3e6ee);border-radius:10px;cursor:pointer;margin-bottom:8px;background:var(--bg,#f8fafc);transition:all .2s">' +
         '<div>' +
-          '<div style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</div>' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">' +
+            '<span style="font-size:14px;font-weight:600;color:var(--t,#1d1d1f)">' + (inst.name || inst.id) + '</span>' +
+            typeTag + modeTag +
+          '</div>' +
           '<div style="font-size:11px;color:var(--t3,#86868b)">' + inst.base_url + '</div>' +
         '</div>' +
         '<span style="font-size:16px;color:var(--a,#3168e0)">→</span>' +
@@ -1209,9 +1242,9 @@ function loadAgentTypes() {
     }).join('');
 
     overlay.innerHTML =
-      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
+      '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:420px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitea_select_title') + '</h3>' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + (isZh ? '选择要登录的 Gitea 实例' : 'Select Gitea Instance') + '</h3>' +
           '<span onclick="document.getElementById(\'gtInstanceModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
         '</div>' +
         '<div>' + itemsHtml + '</div>' +
@@ -1222,20 +1255,21 @@ function loadAgentTypes() {
   function showGiteaTokenModal(instanceId) {
     var old = document.getElementById('gtTokenModal');
     if (old) old.remove();
+    var isZh = I18N.getLang() === 'zh';
     var overlay = document.createElement('div');
     overlay.id = 'gtTokenModal';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px';
     overlay.innerHTML =
       '<div style="background:var(--c,#fff);border-radius:16px;padding:24px;width:400px;max-width:90vw;box-shadow:0 12px 48px rgba(0,0,0,0.18)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + I18N.t('app.login.gitea_token_login') + '</h3>' +
+          '<h3 style="font-size:17px;font-weight:600;color:var(--t,#1d1d1f)">' + (isZh ? 'Gitea Token 登录' : 'Gitea Token Login') + '</h3>' +
           '<span onclick="document.getElementById(\'gtTokenModal\').remove()" style="cursor:pointer;font-size:20px;color:var(--t3,#86868b);line-height:1">×</span>' +
         '</div>' +
-        '<input id="gtTokenInput" type="password" autocomplete="off" placeholder="' + I18N.t('app.login.gitea_token_placeholder') + '" style="width:100%;padding:10px 12px;border:1px solid var(--b,#e3e6ee);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">' +
-        '<div style="font-size:12px;color:var(--t3,#86868b);margin-top:8px">' + I18N.t('app.login.gitea_token_hint') + '</div>' +
+        '<input id="gtTokenInput" type="password" autocomplete="off" placeholder="' + (isZh ? '请输入 Gitea 个人访问令牌 (Token)' : 'Enter Gitea Access Token') + '" style="width:100%;padding:10px 12px;border:1px solid var(--b,#e3e6ee);border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">' +
+        '<div style="font-size:12px;color:var(--t3,#86868b);margin-top:8px">' + (isZh ? '可在 Gitea 用户设置 → 应用 中生成访问令牌' : 'Generate token in Gitea Settings → Applications') + '</div>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
           '<button onclick="document.getElementById(\'gtTokenModal\').remove()" style="padding:8px 18px;border:1px solid var(--b,#e3e6ee);border-radius:8px;background:transparent;color:var(--t,#1d1d1f);font-size:13px;cursor:pointer">' + I18N.t('common.cancel') + '</button>' +
-          '<button id="gtTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#609926;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + I18N.t('app.login.gitea_token_confirm') + '</button>' +
+          '<button id="gtTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#609926;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + (isZh ? '确认登录' : 'Sign In') + '</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(overlay);
@@ -1243,7 +1277,7 @@ function loadAgentTypes() {
     input.focus();
     function submit() {
       var token = input.value.trim();
-      if (!token) return showToast(I18N.t('app.login.empty_input'));
+      if (!token) return showToast(isZh ? '请输入 Token' : 'Please enter token');
       var btn = document.getElementById('gtTokenSubmit');
       btn.disabled = true;
       API.post('/auth/gitea/token-login', {instance: instanceId || '', token: token}).then(d => {
