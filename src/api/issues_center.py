@@ -1206,7 +1206,8 @@ def create_standard_task(repo_key: str, title: str, description: str,
         return {"ok": False, "code": 400, "message": "bot token 缺失"}
     if not assignee:
         assignee = owner or ""
-    issue_num = _find_open_issue_by_title(bot_token, owner, rname, title.strip())
+    issue_num = _find_open_issue_by_title(bot_token, owner, rname, title.strip(),
+                                          provider=_provider)
     created = False
     if issue_num is not None:
         # 已有同标题 open Issue → 直接建档（幂等：不再重复创建 Issue）

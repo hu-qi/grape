@@ -114,7 +114,8 @@ class TestCreateStandardTask:
         """桩掉 _find_open_issue_by_title / _post_gitcode_issue，模拟 GitCode API。"""
         created = {"issues": [], "calls": 0}
 
-        def fake_find(token, owner, repo, title):
+        def fake_find(token, owner, repo, title, provider="gitcode"):
+            assert provider == "gitcode"
             for it in created["issues"]:
                 if it["title"] == title:
                     return it["number"]
@@ -143,6 +144,72 @@ class TestCreateStandardTask:
         assert r2.get("ok") is True
         assert r2.get("created") is False  # 复用已有 Issue
         assert created["calls"] == 1  # 只 POST 一次
+
+
+    def test_github_reuses_preexisting_open_issue(self, parts, monkeypatch):
+        """GitHub onboarding must query GitHub, not GitCode, before creating an Issue."""
+        from src.user import repo_manager
+
+        github_calls = []
+
+        def fake_github_req(method, url, token, body=None):
+            github_calls.append(method)
+            assert token == "github-bot-token"
+            assert url.startswith("https://api.github.com/repos/owner/repo/issues")
+            assert method == "GET", "existing GitHub Issue must be reused without POST"
+            return [{"title": "Onboard", "number": 42}]
+
+        def unexpected_gitcode_req(*args, **kwargs):
+            pytest.fail("GitCode API must never be called for a GitHub repo")
+
+        monkeypatch.setattr(repo_manager, "_github_req", fake_github_req)
+        monkeypatch.setattr(repo_manager, "_req", unexpected_gitcode_req)
+        monkeypatch.setattr(parts, "ensure_issue_task", lambda *args, **kwargs: 1)
+
+        result = parts.create_standard_task(
+            "github:owner/repo", "Onboard", "description", "github-bot-token")
+        assert result["ok"] is True
+        assert result["created"] is False
+        assert result["issue_number"] == 42
+        assert github_calls == ["GET"]
+
+    def test_github_created_issue_is_reused_on_retry(self, parts, monkeypatch):
+        """Two onboarding attempts must create only one GitHub Issue."""
+        from src.user import repo_manager
+
+        issues = []
+        github_calls = []
+
+        def fake_github_req(method, url, token, body=None):
+            github_calls.append(method)
+            assert token == "github-bot-token"
+            assert url.startswith("https://api.github.com/repos/owner/repo/issues")
+            if method == "GET":
+                return list(issues)
+            assert method == "POST"
+            issue = {"number": len(issues) + 1, "title": body["title"]}
+            issues.append(issue)
+            return issue
+
+        def unexpected_gitcode_req(*args, **kwargs):
+            pytest.fail("GitCode API must never be called for a GitHub repo")
+
+        monkeypatch.setattr(repo_manager, "_github_req", fake_github_req)
+        monkeypatch.setattr(repo_manager, "_req", unexpected_gitcode_req)
+        monkeypatch.setattr(parts, "ensure_issue_task", lambda *args, **kwargs: 1)
+
+        first = parts.create_standard_task(
+            "github:owner/repo", "Onboard", "description", "github-bot-token")
+        retry = parts.create_standard_task(
+            "github:owner/repo", "Onboard", "description", "github-bot-token")
+        assert first["ok"] is True
+        assert first["created"] is True
+        assert retry["ok"] is True
+        assert retry["created"] is False
+        assert first["issue_number"] == retry["issue_number"] == 1
+        assert len(issues) == 1
+        assert github_calls == ["GET", "POST", "GET"]
+
 
 
 class TestPostResultToIssueNoMessage:
