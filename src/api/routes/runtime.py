@@ -823,9 +823,9 @@ def list_runtime_tasks(runtime_id: int, user: dict = Depends(require_no_session_
         clauses.append("status=?")
         params.append(status)
     if repo:
-        _base = repo.split(":", 1)[1] if ":" in repo else repo
-        repo_key = f"gitcode:{_base}"
-        _rk_list = [f"gitcode:{_base}", f"github:{_base}"]
+        from src.repo_key import cross_provider_keys
+        _rk_list = cross_provider_keys(repo)
+        repo_key = _rk_list[0] if _rk_list else repo
         clauses.append(f"repo_key IN ({','.join('?' * len(_rk_list))})")
         params.extend(_rk_list)
     with db_lock:
@@ -856,8 +856,8 @@ def list_runtime_sessions(runtime_id: int, user: dict = Depends(require_no_sessi
     repo_clause = ""
     params: list = []
     if repo:
-        _base = repo.split(":", 1)[1] if ":" in repo else repo
-        _rk_list = [f"gitcode:{_base}", f"github:{_base}"]
+        from src.repo_key import cross_provider_keys
+        _rk_list = cross_provider_keys(repo)
         repo_clause = f" AND repo_key IN ({','.join('?' * len(_rk_list))})"
         params.extend(_rk_list)
 

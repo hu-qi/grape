@@ -1280,23 +1280,22 @@ def remove_managed_repo(body: RepoAction, user: dict = Depends(require_no_sessio
     owner, repo_name = parts
 
     # 按 provider 分流：前端传的 full_name 不含前缀
-    # 先尝试 gitcode:（默认），不存在再尝试 github:
-    from src.repo_key import to_repo_key as _rk
-    gc_key = to_repo_key(body.full_name)  # 默认 gitcode:
-    gh_key = _rk(body.full_name, provider="github")
+    from src.repo_key import cross_provider_keys, parse_repo_key
+    candidates = cross_provider_keys(body.full_name)
 
     # 判断实际存在的 repo_key（直接查 managed_repos 表）
-    repo_key = gc_key
+    repo_key = candidates[0] if candidates else f"gitcode:{body.full_name}"
     repo_provider = "gitcode"
     try:
         from src.session_manager import db, db_lock
         with db_lock:
             c0 = db.cursor()
-            c0.execute("SELECT repo_key FROM managed_repos WHERE repo_key IN (?, ?)", (gh_key, gc_key))
+            placeholders = ",".join("?" * len(candidates))
+            c0.execute(f"SELECT repo_key FROM managed_repos WHERE repo_key IN ({placeholders}) LIMIT 1", candidates)
             row0 = c0.fetchone()
-            if row0 and row0[0].startswith("github:"):
-                repo_key = gh_key
-                repo_provider = "github"
+            if row0:
+                repo_key = row0[0]
+                repo_provider, _, _ = parse_repo_key(repo_key)
     except Exception:
         pass  # 测试环境（mock）走默认 gitcode:
 

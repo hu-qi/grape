@@ -362,13 +362,13 @@ def update_session(sid, history, status, oc_session_id=None, backend=""):
 def dump_history_to_file(repo_key: str, history: list, account: str = ""):
     """将 event_history 写入 workspace 目录（按 account 分目录，每文件最多 10 条）"""
     from src.config import WORKSPACE_DIR
-    from src.repo_key import parse_repo_key
+    from src.repo_key import parse_repo_key, strip_repo_prefix
     clean = []
     for r in history:
         entry = {k: v for k, v in r.items() if k != "oc_session_id"}
         clean.append(entry)
     _provider, _owner, _repo = parse_repo_key(repo_key)
-    repo_name = f"{_owner}_{_repo}" if _owner and _repo else repo_key.replace("gitcode:", "").replace("github:", "").replace("/", "_")
+    repo_name = f"{_owner}_{_repo}" if _owner and _repo else strip_repo_prefix(repo_key).replace("/", "_")
     account_dir = account or "default"
     hist_dir = os.path.join(WORKSPACE_DIR, "history", account_dir, _provider or "gitcode", repo_name)
     try:
@@ -396,9 +396,9 @@ def dump_history_to_file(repo_key: str, history: list, account: str = ""):
 def get_history_file_list(repo_key: str, account: str = "") -> list[str]:
     """返回可用的历史文件路径列表（最新在前）"""
     from src.config import WORKSPACE_DIR
-    from src.repo_key import parse_repo_key
+    from src.repo_key import parse_repo_key, strip_repo_prefix
     _provider, _owner, _repo = parse_repo_key(repo_key)
-    repo_name = f"{_owner}_{_repo}" if _owner and _repo else repo_key.replace("gitcode:", "").replace("github:", "").replace("/", "_")
+    repo_name = f"{_owner}_{_repo}" if _owner and _repo else strip_repo_prefix(repo_key).replace("/", "_")
     account_dir = account or "default"
     hist_dir = os.path.join(WORKSPACE_DIR, "history", account_dir, _provider or "gitcode", repo_name)
     files = []

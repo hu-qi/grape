@@ -76,9 +76,9 @@ def get_ops_overview(repo: str = "", user: dict = Depends(require_org_member)):
     _repo_params = []
     repo_key = ""
     if repo:
-        _base = repo.split(":", 1)[1] if ":" in repo else repo
-        _repo_keys = [f"gitcode:{_base}", f"github:{_base}"]
-        repo_key = _repo_keys[0]
+        from src.repo_key import cross_provider_keys
+        _repo_keys = cross_provider_keys(repo)
+        repo_key = _repo_keys[0] if _repo_keys else ""
         _repo_filter = f" AND repo_key IN ({','.join('?' * len(_repo_keys))})"
         _repo_params = _repo_keys
     # stuck 阈值：running 超 22 分钟（worker 默认 RUNTIME_TASK_TIMEOUT=3600s=1h，22min 能在超时前预警）
@@ -636,9 +636,10 @@ async def get_error_logs(limit: int = 100, level: str = "", repo: str = "", user
     _repo_filter_list = []
     _base = ""
     if repo:
+        from src.repo_key import cross_provider_keys
         _base = repo.split(":", 1)[1] if ":" in repo else repo
-        _repo_filter_list = [f"gitcode:{_base}", f"github:{_base}"]
-        _repo_filter = _repo_filter_list[0]
+        _repo_filter_list = cross_provider_keys(repo)
+        _repo_filter = _repo_filter_list[0] if _repo_filter_list else ""
 
     entries = []
     files_read = []
@@ -825,9 +826,9 @@ async def get_ops_timeline(repo: str = ""):
     repo_key = ""
     _repo_keys = []
     if repo:
-        _base = repo.split(":", 1)[1] if ":" in repo else repo
-        _repo_keys = [f"gitcode:{_base}", f"github:{_base}"]
-        repo_key = _repo_keys[0]
+        from src.repo_key import cross_provider_keys
+        _repo_keys = cross_provider_keys(repo)
+        repo_key = _repo_keys[0] if _repo_keys else ""
 
     with db_lock:
         c = db.cursor()
@@ -1016,9 +1017,10 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
     from src.api.deps import check_repo_access
     check_repo_access(user, repo_key)
 
-    # 跨平台 repo_key 候选：DB 中可能是 gitcode: 或 github: 前缀
+    # 跨平台 repo_key 候选：DB 中可能是 gitcode:/github:/gitea:/gitlab: 前缀
+    from src.repo_key import cross_provider_keys
     _owner_repo = f"{owner}/{repo}"
-    _repo_keys = [f"gitcode:{_owner_repo}", f"github:{_owner_repo}"]
+    _repo_keys = cross_provider_keys(_owner_repo)
     _rk_placeholders = ",".join("?" * len(_repo_keys))
 
     from src.session_manager import db, db_lock
@@ -1028,8 +1030,8 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
         recent_events = []
         try:
             c.execute(
-                "SELECT seq, event_type, agent_type, title, summary, status, created_at FROM events WHERE repo_key IN (?,?) ORDER BY seq DESC LIMIT 5",
-                (_repo_keys)
+                f"SELECT seq, event_type, agent_type, title, summary, status, created_at FROM events WHERE repo_key IN ({_rk_placeholders}) ORDER BY seq DESC LIMIT 5",
+                _repo_keys
             )
             recent_events = [
                 {"seq": r[0], "event_type": r[1], "agent_type": r[2] or "", "title": r[3] or r[1],
@@ -1042,11 +1044,11 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
         agent_sessions = []
         try:
             c.execute(
-                "SELECT s.agent_type, r.name, s.status, s.last_active_at, s.enable, COALESCE(rc.status,'') "
-                "FROM devops_agent_session s LEFT JOIN agent_runtimes r ON s.runtime_id=r.id "
-                "LEFT JOIN runtime_credentials rc ON rc.id=r.credential_id "
-                "WHERE s.repo_key IN (?,?) ORDER BY s.agent_type",
-                (_repo_keys)
+                f"SELECT s.agent_type, r.name, s.status, s.last_active_at, s.enable, COALESCE(rc.status,'') "
+                f"FROM devops_agent_session s LEFT JOIN agent_runtimes r ON s.runtime_id=r.id "
+                f"LEFT JOIN runtime_credentials rc ON rc.id=r.credential_id "
+                f"WHERE s.repo_key IN ({_rk_placeholders}) ORDER BY s.agent_type",
+                _repo_keys
             )
             agent_sessions = []
             for r in c.fetchall():
@@ -1066,7 +1068,7 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
         try:
             for atype in ["vod", "issue", "coding", "qa", "sre"]:
                 c.execute(
-                    "SELECT seq, event_type, agent_type, title, summary, status, created_at FROM events WHERE repo_key IN (?,?) AND agent_type=? ORDER BY seq DESC LIMIT 2",
+                    f"SELECT seq, event_type, agent_type, title, summary, status, created_at FROM events WHERE repo_key IN ({_rk_placeholders}) AND agent_type=? ORDER BY seq DESC LIMIT 2",
                     (_repo_keys + [atype])
                 )
                 agent_recent_events[atype] = [
@@ -1230,18 +1232,18 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
         with db_lock:
             # total_issues: 统计不同 issue_id 的数量（去重）
             c.execute(
-                "SELECT COUNT(DISTINCT issue_id) FROM events WHERE repo_key IN (?,?) AND issue_id!='' AND issue_id IS NOT NULL",
-                (_repo_keys))
+                f"SELECT COUNT(DISTINCT issue_id) FROM events WHERE repo_key IN ({_rk_placeholders}) AND issue_id!='' AND issue_id IS NOT NULL",
+                _repo_keys)
             metrics["total_issues"] = c.fetchone()[0] or 0
             # Auto-Resolution: completed / (completed + failed)
             c.execute(
-                "SELECT COUNT(*) FROM events WHERE repo_key IN (?,?) AND status='completed'",
-                (_repo_keys)
+                f"SELECT COUNT(*) FROM events WHERE repo_key IN ({_rk_placeholders}) AND status='completed'",
+                _repo_keys
             )
             completed = c.fetchone()[0] or 0
             c.execute(
-                "SELECT COUNT(*) FROM events WHERE repo_key IN (?,?) AND status='failed'",
-                (_repo_keys)
+                f"SELECT COUNT(*) FROM events WHERE repo_key IN ({_rk_placeholders}) AND status='failed'",
+                _repo_keys
             )
             failed = c.fetchone()[0] or 0
             total_done = completed + failed
@@ -1249,15 +1251,15 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
 
             # Events/Week: 最近 7 天事件数
             c.execute(
-                "SELECT COUNT(*) FROM events WHERE repo_key IN (?,?) AND created_at >= datetime('now', '-7 days')",
-                (_repo_keys)
+                f"SELECT COUNT(*) FROM events WHERE repo_key IN ({_rk_placeholders}) AND created_at >= datetime('now', '-7 days')",
+                _repo_keys
             )
             metrics["events_week"] = c.fetchone()[0] or 0
 
             # Avg Response: 已完成事件的平均 duration（秒）
             c.execute(
-                "SELECT AVG(duration) FROM events WHERE repo_key IN (?,?) AND status='completed' AND duration IS NOT NULL AND duration > 0",
-                (_repo_keys)
+                f"SELECT AVG(duration) FROM events WHERE repo_key IN ({_rk_placeholders}) AND status='completed' AND duration IS NOT NULL AND duration > 0",
+                _repo_keys
             )
             avg_dur = c.fetchone()[0]
             metrics["avg_response"] = round(avg_dur, 1) if avg_dur else 0
@@ -1275,8 +1277,8 @@ def get_dashboard(owner: str, repo: str, user: dict = Depends(require_org_member
         if dev_scene:
             with db_lock:
                 c.execute(
-                    "SELECT advanced_options FROM devops_pipeline_scene "
-                    "WHERE scene_id=? AND repo_key IN (?,?) AND is_active=1 LIMIT 1",
+                    f"SELECT advanced_options FROM devops_pipeline_scene "
+                    f"WHERE scene_id=? AND repo_key IN ({_rk_placeholders}) AND is_active=1 LIMIT 1",
                     ([dev_scene] + _repo_keys))
                 _adv_row = c.fetchone()
             if _adv_row and _adv_row[0]:

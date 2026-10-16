@@ -23,6 +23,9 @@ def from_repo_key(repo_key: str) -> str:
     return repo_key.split(":", 1)[-1] if ":" in repo_key else repo_key
 
 
+strip_repo_prefix = from_repo_key
+
+
 def parse_repo_key(repo_key: str) -> tuple[str, str, str]:
     """gitcode:owner/repo → (provider, owner, repo)。无前缀时 provider 默认 'gitcode'。"""
     if not repo_key:
@@ -42,6 +45,22 @@ def split_owner_repo(owner_repo: str) -> tuple[str, str]:
         owner_repo = owner_repo.split(":", 1)[-1]
     owner, _, repo = owner_repo.partition("/")
     return owner, repo
+
+
+ALL_PROVIDERS = ("gitcode", "github", "gitea", "gitlab")
+
+
+def cross_provider_keys(repo_key: str) -> list[str]:
+    """owner/repo（或任意前缀 repo_key）→ 四平台候选 repo_key 列表。
+
+    前端传入无前缀 owner/repo，DB 中实际前缀取决于接入平台
+    （gitcode/github/gitea/gitlab），统一给出全部候选避免漏查；
+    多余候选只是匹配不上，不影响正确性。
+    """
+    if not repo_key:
+        return []
+    base = repo_key.split(":", 1)[1] if ":" in repo_key else repo_key
+    return [f"{p}:{base}" for p in ALL_PROVIDERS]
 
 
 def workspace_repo_dir(repo_key: str) -> str:

@@ -59,6 +59,17 @@ def increment_admin_token_version(admin_id: int) -> int:
     return new_ver
 
 
+def create_admin_account(username: str, password: str, is_super: int = 1) -> int:
+    """创建 admin 账号，返回自增 id。供重置脚本在账号缺失时补建。"""
+    with db_lock:
+        c = db.cursor()
+        c.execute("INSERT INTO admin_accounts (username, password_hash, is_super, token_version) VALUES (?,?,?,0)",
+                  (username, _hash_password(password), is_super))
+        new_id = c.lastrowid
+        db.commit()
+    return new_id
+
+
 def update_admin_password(admin_id: int, new_password: str) -> bool:
     with db_lock:
         c = db.cursor()

@@ -15,8 +15,8 @@ MAX_EXTRACT_BYTES = int(os.environ.get("SKILL_MAX_EXTRACT_BYTES", str(100 * 1024
 
 
 def _resolve_repo_key(repo: str) -> str:
-    """查 DB 确定实际 repo_key 前缀（gitcode: 或 github:）。"""
-    from src.repo_key import to_repo_key
+    """查 DB 确定实际 repo_key 前缀（gitcode:/github:/gitea:/gitlab:）。"""
+    from src.repo_key import to_repo_key, cross_provider_keys
     rk = to_repo_key(repo)
     if ":" in repo:
         return rk
@@ -24,8 +24,10 @@ def _resolve_repo_key(repo: str) -> str:
         from src.session_manager import db as _db, db_lock as _dl
         with _dl:
             c = _db.cursor()
-            row = c.execute("SELECT repo_key FROM managed_repos WHERE repo_key IN (?, ?) LIMIT 1",
-                            (f"gitcode:{repo}", f"github:{repo}")).fetchone()
+            candidates = cross_provider_keys(repo)
+            placeholders = ",".join("?" * len(candidates))
+            row = c.execute(f"SELECT repo_key FROM managed_repos WHERE repo_key IN ({placeholders}) LIMIT 1",
+                            candidates).fetchone()
             if row:
                 return row[0]
     except Exception:

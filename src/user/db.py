@@ -1718,15 +1718,14 @@ def refresh_gitcode_oauth_token(user_id: int) -> str | None:
 
 def get_webhook_token_by_repo(full_name: str) -> str:
     """根据 full_name（owner/repo）查找 repo 的预期 webhook token（按 provider 分流）。"""
-    from src.repo_key import to_repo_key
+    from src.repo_key import cross_provider_keys
     with db_lock:
         c = db.cursor()
-        # 同时查 gitcode: 和 github: 前缀
-        gc_key = to_repo_key(full_name)  # 默认 gitcode:
-        gh_key = to_repo_key(full_name, provider="github")
+        candidates = cross_provider_keys(full_name)
+        placeholders = ",".join("?" * len(candidates))
         c.execute(
-            "SELECT gitcode_webhook_token, github_webhook_token FROM managed_repos WHERE repo_key IN (?, ?) LIMIT 1",
-            (gc_key, gh_key)
+            f"SELECT gitcode_webhook_token, github_webhook_token FROM managed_repos WHERE repo_key IN ({placeholders}) LIMIT 1",
+            candidates
         )
         row = c.fetchone()
         if not row:

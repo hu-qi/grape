@@ -134,6 +134,19 @@ python -m src.api.run --dev    # 开发：单端口 3000，热重载
 
 生产部署（nginx 反代 / systemd / Docker）示例见 `docs/DEPLOYMENT`。
 
+### 管理后台
+
+内置管理后台地址为 `/admin`。首次部署会种子一个管理员账号 `admin / Grape@510630`，
+可用环境变量 `GRAPE_ADMIN_PASSWORD` 覆盖。**首次登录后请立即修改密码**，后台会给出提示。
+
+已有部署若管理员仍为旧的弱默认密码，可就地重置：
+
+```bash
+python scripts/reset_admin_password.py                 # dry-run：显示将重置的账号
+python scripts/reset_admin_password.py --apply         # 重置为 Grape@510630
+python scripts/reset_admin_password.py --apply -p 'YourOwn@Pass'   # 重置为自定义密码
+```
+
 ### 配置
 
 | 文件 | 说明 |

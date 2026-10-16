@@ -206,11 +206,13 @@ def list_tasks(
            "FROM autopilot_tasks")
     conditions = []
     params = []
-    # 跨平台前缀兼容（与 check_repo_access 对齐）：gitcode:↔github: 互换匹配
+    # 跨平台前缀兼容（与 check_repo_access 对齐）：gitcode/github/gitea/gitlab 互换匹配
     if repo_key:
-        base = repo_key.split(":", 1)[1] if ":" in repo_key else repo_key
-        conditions.append("(repo_key=? OR repo_key=? OR repo_key=?)")
-        params.extend([repo_key, f"gitcode:{base}", f"github:{base}"])
+        from src.repo_key import cross_provider_keys
+        _candidates = list(dict.fromkeys([repo_key] + cross_provider_keys(repo_key)))
+        _placeholders = ",".join("?" * len(_candidates))
+        conditions.append(f"repo_key IN ({_placeholders})")
+        params.extend(_candidates)
     if enabled is not None:
         conditions.append("enabled=?")
         params.append(enabled)

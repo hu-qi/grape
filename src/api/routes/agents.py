@@ -168,12 +168,9 @@ def get_agent_detail(name: str, owner: str, repo: str, issue_number: str = "",
     from src.api.deps import check_repo_access
     check_repo_access(user, repo_key)
 
-    # 同时查 gitcode: 和 github: 前缀（用户可能切换了 provider）
-    _repo_keys = [repo_key]
-    if repo_key.startswith("gitcode:"):
-        _repo_keys.append(f"github:{_owner_repo}")
-    elif repo_key.startswith("github:"):
-        _repo_keys.append(f"gitcode:{_owner_repo}")
+    # 跨平台候选（用户可能来自 github/gitea/gitlab 等平台）
+    from src.repo_key import cross_provider_keys
+    _repo_keys = cross_provider_keys(_owner_repo)
     _rk_placeholders = ",".join("?" * len(_repo_keys))
 
     # Issue #108: 归一化 issue_number → #N 格式，供前端高亮匹配

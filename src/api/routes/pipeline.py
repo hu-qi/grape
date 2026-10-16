@@ -346,12 +346,9 @@ def get_pipeline(owner: str, repo: str, user: dict = Depends(require_no_session_
     from src.api.deps import check_repo_access
     check_repo_access(user, repo_key)
 
-    # 同时查 gitcode: 和 github: 前缀的事件（用户可能切换了 provider）
-    _repo_keys = [repo_key]
-    if repo_key.startswith("gitcode:"):
-        _repo_keys.append(f"github:{_owner_repo}")
-    elif repo_key.startswith("github:"):
-        _repo_keys.append(f"gitcode:{_owner_repo}")
+    # 跨平台候选（用户可能切换了 provider 或通过其他平台接入）
+    from src.repo_key import cross_provider_keys
+    _repo_keys = cross_provider_keys(_owner_repo)
 
     from src.session_manager import db, db_lock
     with db_lock:

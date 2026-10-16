@@ -1202,12 +1202,11 @@ def get_chat_config(user: dict = Depends(require_no_session_token), repo: str = 
             pass
     # Load chat skills from skill table（官方 + 个人 + 当前仓库，agent_type='chat'）
     chat_skills = []
-    from src.repo_key import to_repo_key
+    from src.repo_key import to_repo_key, cross_provider_keys
     # 跨平台：查 DB 确定 repo_key 实际前缀
     _rk_candidates = []
     if repo:
-        _base = repo.split(":", 1)[1] if ":" in repo else repo
-        _rk_candidates = [f"gitcode:{_base}", f"github:{_base}"]
+        _rk_candidates = cross_provider_keys(repo)
     with db_lock:
         c = db.cursor()
         try:

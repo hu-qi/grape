@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS admin_accounts (
   - 若表为空 → 插入默认账号 `admin`，密码 `Grape@510630`（sha256）
   - meta 表写入标记：`admin_initialized = 1`、`admin_pwd_initial = 1`（标识仍为默认密码）
 - 密码来源优先级：环境变量 `GRAPE_ADMIN_PASSWORD` > 默认 `Grape@510630`
+- 存量部署（默认值仅在表空时生效）重置：`python scripts/reset_admin_password.py --apply`（改密并 `token_version+1`）
 - README / 部署文档明示默认凭据与改密引导
 
 ### 4.3 admin 认证（JWT）

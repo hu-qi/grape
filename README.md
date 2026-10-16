@@ -128,6 +128,20 @@ python -m src.api.run --dev    # Development: single port 3000, hot-reload
 
 Production deployment examples (nginx reverse proxy / systemd / Docker) in `docs/DEPLOYMENT`.
 
+### Admin Console
+
+The built-in admin console is served at `/admin`. On first deployment an admin account
+is seeded as `admin / Grape@510630`; override it with the `GRAPE_ADMIN_PASSWORD`
+environment variable. **Change the password after first login** — the console will prompt you.
+
+For an existing deployment whose admin password is still the old weak default, reset it in place:
+
+```bash
+python scripts/reset_admin_password.py                 # dry-run: show the target account
+python scripts/reset_admin_password.py --apply         # reset to Grape@510630
+python scripts/reset_admin_password.py --apply -p 'YourOwn@Pass'   # reset to a custom password
+```
+
 ### Configuration
 
 | File | Description |

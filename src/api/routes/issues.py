@@ -148,21 +148,9 @@ def _repo_key_of(owner: str, repo: str) -> str:
 
 
 def _repo_keys_of(owner: str, repo: str) -> list[str]:
-    """跨 provider 双查：返回 [gitcode:owner/repo, github:owner/repo] 两个前缀。
-
-    与 pipeline.py 的双查逻辑一致——用户可能通过 GitHub Webhook 接入仓库，
-    DB 中数据存为 github: 前缀，但前端传入的 owner/repo 无 provider 信息，
-    _repo_key_of 默认返回 gitcode: 前缀会漏查 GitHub 仓库数据。
-    """
-    from src.repo_key import to_repo_key
-    _owner_repo = f"{owner}/{repo}"
-    repo_key = to_repo_key(_owner_repo)
-    keys = [repo_key]
-    if repo_key.startswith("gitcode:"):
-        keys.append(f"github:{_owner_repo}")
-    elif repo_key.startswith("github:"):
-        keys.append(f"gitcode:{_owner_repo}")
-    return keys
+    """跨 provider 四平台查询候选：返回 [gitcode, github, gitea, gitlab] 前缀。"""
+    from src.repo_key import cross_provider_keys
+    return cross_provider_keys(f"{owner}/{repo}")
 
 
 def _issue_stage_map(repo_keys: list[str]) -> dict:

@@ -1990,9 +1990,10 @@ def list_events(owner: str, repo: str,
 
     from src.session_manager import db, db_lock
 
-    # 跨平台 repo_key 候选（用户可能通过 GitHub OAuth 登录）
+    # 跨平台 repo_key 候选（用户可能通过 GitHub/Gitea/GitLab 登录）
+    from src.repo_key import cross_provider_keys
     _owner_repo = f"{owner}/{repo}"
-    _repo_keys = [f"gitcode:{_owner_repo}", f"github:{_owner_repo}"]
+    _repo_keys = cross_provider_keys(_owner_repo)
     _rk_placeholders = ",".join("?" * len(_repo_keys))
 
     where_clauses = [f"repo_key IN ({_rk_placeholders})"]

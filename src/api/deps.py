@@ -297,8 +297,8 @@ def check_repo_access(user: dict, repo_key: str) -> None:
     
     用于 dashboard/events/pipeline/agents 等按 repo_key 查询的接口，防止用户访问他人仓库的数据。
     session_token / api_key 认证方式跳过校验（已由 token 作用域限定）。
-    同时检查 gitcode: 和 github: 前缀——前端 URL 不含平台前缀，to_repo_key 默认加 gitcode:，
-    但用户可能通过 GitHub OAuth 登录，仓库实际是 github: 前缀。
+    同时检查各平台前缀——前端 URL 不含平台前缀，to_repo_key 默认加 gitcode:，
+    但用户可能通过其他平台 OAuth/Token 登录，仓库实际是 github:/gitea:/gitlab: 前缀。
     """
     auth_type = user.get("auth_type", "jwt")
     if auth_type in ("session_token", "api_key"):
@@ -308,9 +308,9 @@ def check_repo_access(user: dict, repo_key: str) -> None:
         raise HTTPException(status_code=403, detail={"code": 403, "message": "No permission to access this repository"})
     from src.repo_key import to_repo_key
     rk = to_repo_key(repo_key)
-    # 构建候选 repo_key 列表：原始 + 跨平台前缀（gitcode:↔github:）
+    # 构建候选 repo_key 列表：原始 + 跨平台前缀（gitcode/github/gitea/gitlab 互为镜像候选）
     base = rk.split(":", 1)[1] if ":" in rk else rk
-    candidates = {f"gitcode:{base}", f"github:{base}"}
+    candidates = {f"{p}:{base}" for p in ("gitcode", "github", "gitea", "gitlab")}
     repos = user_db.get_managed_repos(uid)
     for r in repos:
         if r["repo_key"] in candidates:

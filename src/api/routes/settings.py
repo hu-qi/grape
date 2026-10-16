@@ -12,8 +12,8 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 def _resolve_repo_key(owner_repo: str) -> str:
-    """查 DB 确定实际 repo_key 前缀（gitcode: 或 github:）。"""
-    from src.repo_key import to_repo_key
+    """查 DB 确定实际 repo_key 前缀（gitcode:/github:/gitea:/gitlab:）。"""
+    from src.repo_key import to_repo_key, cross_provider_keys
     rk = to_repo_key(owner_repo)
     if ":" in owner_repo:
         return rk
@@ -21,8 +21,10 @@ def _resolve_repo_key(owner_repo: str) -> str:
         from src.session_manager import db as _db, db_lock as _dl
         with _dl:
             c = _db.cursor()
-            row = c.execute("SELECT repo_key FROM managed_repos WHERE repo_key IN (?, ?) LIMIT 1",
-                            (f"gitcode:{owner_repo}", f"github:{owner_repo}")).fetchone()
+            candidates = cross_provider_keys(owner_repo)
+            placeholders = ",".join("?" * len(candidates))
+            row = c.execute(f"SELECT repo_key FROM managed_repos WHERE repo_key IN ({placeholders}) LIMIT 1",
+                            candidates).fetchone()
             if row:
                 return row[0]
     except Exception:

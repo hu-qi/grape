@@ -28,16 +28,15 @@ def _repo_base(repo_key: str) -> str:
 def _resolve_repo_key(repo: str) -> str:
     """将前端传入的 owner/repo 解析为 DB 中实际使用的 repo_key。
     
-    to_repo_key 默认 gitcode: 前缀，但 GitHub OAuth 仓库在 DB 中是 github: 前缀。
+    to_repo_key 默认 gitcode: 前缀，但第三方平台 OAuth/Token 仓库在 DB 中是 github:/gitea:/gitlab: 前缀。
     查 managed_repos 表确定实际前缀，找不到则回退 to_repo_key 默认值。
     """
-    from src.repo_key import to_repo_key
+    from src.repo_key import to_repo_key, cross_provider_keys
     repo_key = to_repo_key(repo)
     if ":" in repo:
         return repo_key  # 已带前缀，直接返回
     # 查 DB 确定实际前缀
-    base = repo
-    candidates = [f"gitcode:{base}", f"github:{base}"]
+    candidates = cross_provider_keys(repo)
     try:
         from src.session_manager import db, db_lock
         with db_lock:

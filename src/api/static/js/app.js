@@ -3,7 +3,7 @@
 // 外部/前端约定一律无前缀；dashboard 响应可能带 gitcode:/github: 前缀，需剥离
 // ═══════════════════════════════════════════════════════════════
 function stripRepoPrefix(s) {
-  return String(s || '').replace(/^(gitcode|github|gitlab):/, '');
+  return String(s || '').replace(/^(gitcode|github|gitlab|gitea):/, '');
 }
 window.stripRepoPrefix = stripRepoPrefix;
 
