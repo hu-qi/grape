@@ -73,5 +73,16 @@
 **Tests**: Regression suites `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_gitea_gitlab_issues.py`, `test_git_provider.py`, `test_host_status.py` (74 passed); JS syntax check via `node --check`.
 **Status**: Completed
 
+## Stage 11: Fix Gitea/GitLab instance selection modal closing & login cleanup
+**Goal**: Fix the bug where "Select Gitea/GitLab Instance" modal remains stuck or unclosed after login or token prompt transition.
+**Success Criteria**:
+- Entering Token login from the multi-instance modal immediately removes the instance selection modal (`gtInstanceModal` / `glInstanceModal`).
+- Triggering OAuth redirection immediately removes the instance selection modal to prevent stale dialogs upon navigation or back/restore.
+- Successfully completing login (both OAuth token restoration and Token modal submit) invokes `_closeAllLoginModals()` in `showApp()`, ensuring all login-related overlays are cleanly unmounted.
+- Clicking the backdrop overlay outside the dialog content closes the instance and token modals cleanly.
+**Tests**: `node -c src/api/static/js/app.js` syntax check passed; regression test suite `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_gitea_gitlab_issues.py`, `test_git_provider.py`, `test_host_status.py` (74 passed).
+**Status**: Completed
+
+
 
 

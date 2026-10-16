@@ -168,7 +168,15 @@ function loadAgentTypes() {
   }).catch(() => {});
 }
 
+  function _closeAllLoginModals() {
+    ['gtInstanceModal', 'gtTokenModal', 'glInstanceModal', 'glTokenModal', 'whitelistModal'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  }
+
   function showApp() {
+    _closeAllLoginModals();
     document.documentElement.setAttribute('data-logged-in', '1');
     $('loginView').classList.add('hid');
     // 工作台已由 CSS 显示，立即展示加载中状态
@@ -1115,6 +1123,8 @@ function loadAgentTypes() {
   }
 
   function oauthLoginGitlab(instanceId) {
+    var instModal = document.getElementById('glInstanceModal');
+    if (instModal) instModal.remove();
     var url = '/auth/login/gitlab' + (instanceId ? ('?instance=' + encodeURIComponent(instanceId)) : '');
     API.get(url).then(d => {
       if (d.redirect_url) window.location.href = d.redirect_url;
@@ -1167,10 +1177,13 @@ function loadAgentTypes() {
         '</div>' +
         '<div>' + itemsHtml + '</div>' +
       '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
   }
 
   function showGitlabTokenModal(instanceId) {
+    var instModal = document.getElementById('glInstanceModal');
+    if (instModal) instModal.remove();
     var old = document.getElementById('glTokenModal');
     if (old) old.remove();
     var isZh = I18N.getLang() === 'zh';
@@ -1190,6 +1203,7 @@ function loadAgentTypes() {
           '<button id="glTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#fc6d26;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + (isZh ? '确认登录' : 'Sign In') + '</button>' +
         '</div>' +
       '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
     var input = document.getElementById('glTokenInput');
     input.focus();
@@ -1202,7 +1216,7 @@ function loadAgentTypes() {
         localStorage.setItem('token', d.token);
         localStorage.setItem('user', JSON.stringify(d.user));
         API.scheduleProactiveRefresh();  // Issue #86: 启动主动刷新定时器
-        document.getElementById('glTokenModal').remove();
+        _closeAllLoginModals();
         showApp();
       }).catch(e => {
         btn.disabled = false;
@@ -1214,6 +1228,8 @@ function loadAgentTypes() {
   }
 
   function oauthLoginGitea(instanceId) {
+    var instModal = document.getElementById('gtInstanceModal');
+    if (instModal) instModal.remove();
     var url = '/auth/login/gitea' + (instanceId ? ('?instance=' + encodeURIComponent(instanceId)) : '');
     API.get(url).then(d => {
       if (d.redirect_url) window.location.href = d.redirect_url;
@@ -1258,10 +1274,13 @@ function loadAgentTypes() {
         '</div>' +
         '<div>' + itemsHtml + '</div>' +
       '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
   }
 
   function showGiteaTokenModal(instanceId) {
+    var instModal = document.getElementById('gtInstanceModal');
+    if (instModal) instModal.remove();
     var old = document.getElementById('gtTokenModal');
     if (old) old.remove();
     var isZh = I18N.getLang() === 'zh';
@@ -1281,6 +1300,7 @@ function loadAgentTypes() {
           '<button id="gtTokenSubmit" style="padding:8px 18px;border:none;border-radius:8px;background:#609926;color:#fff;font-size:13px;font-weight:600;cursor:pointer">' + (isZh ? '确认登录' : 'Sign In') + '</button>' +
         '</div>' +
       '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
     var input = document.getElementById('gtTokenInput');
     input.focus();
@@ -1293,7 +1313,7 @@ function loadAgentTypes() {
         localStorage.setItem('token', d.token);
         localStorage.setItem('user', JSON.stringify(d.user));
         API.scheduleProactiveRefresh();
-        document.getElementById('gtTokenModal').remove();
+        _closeAllLoginModals();
         showApp();
       }).catch(e => {
         btn.disabled = false;
