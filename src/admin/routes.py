@@ -57,6 +57,8 @@ class ConfigBody(BaseModel):
     gitea_mode: str | None = None
     gitea_default_instance: str | None = None
     gitea_instances: list[dict] | None = None
+    server_base_url: str = ""
+    webhook_url: str = ""
 
 
 class VerifyTokenBody(BaseModel):

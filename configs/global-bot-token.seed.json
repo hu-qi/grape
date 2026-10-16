@@ -36,5 +36,7 @@
       "client_id": "",
       "client_secret": ""
     }
-  ]
+  ],
+  "server_base_url": "http://172.16.145.202:30404",
+  "webhook_url": "http://172.16.145.202:30404/webhook/gitcode"
 }

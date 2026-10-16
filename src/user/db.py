@@ -1888,12 +1888,20 @@ def set_meta_value(key: str, value: str):
             log.warning(f"set_meta_value failed: {key}: {e}")
 
 
-def get_server_base_url() -> str:
+def get_server_base_url(request=None) -> str:
     """返回服务端 API 基址（A2A/tasks 等协议端点用，不含 /webhook/gitcode 后缀）。
 
-    优先取 configs/server-config.json 显式配置；无则 meta.server_base_url；
-    再兜底从 webhook_url 剥掉 /webhook/gitcode 后缀；最后 http://localhost:8080。
+    优先级：
+    1. 显式环境变量 GRAPE_SERVER_URL / SERVER_BASE_URL
+    2. configs/server-config.json
+    3. request 请求头推导出的真实 Host
+    4. meta 表 server_base_url（排除 10.x 等集群 Pod 私网 IP 污染）
+    5. 从 webhook_url 推导
+    6. 兜底 http://localhost:8080
     """
+    env_url = (os.environ.get("GRAPE_SERVER_URL") or os.environ.get("SERVER_BASE_URL") or "").strip().rstrip("/")
+    if env_url:
+        return env_url
     try:
         from src.config import read_server_config
         _sb = (read_server_config().get("server_base_url") or "").strip().rstrip("/")
@@ -1901,14 +1909,22 @@ def get_server_base_url() -> str:
             return _sb
     except Exception:
         pass
+    if request is not None:
+        try:
+            proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+            if host:
+                return f"{proto}://{host}".rstrip("/")
+        except Exception:
+            pass
     try:
-        base = get_meta_value("server_base_url") or ""
-        if base:
-            return base.rstrip("/")
-        wu = get_webhook_url() or ""
+        base = (get_meta_value("server_base_url") or "").strip().rstrip("/")
+        if base and not (base.startswith("http://10.") or base.startswith("https://10.")):
+            return base
+        wu = get_webhook_url(request=request) or ""
         if wu:
             base = wu.rstrip("/")
-            for suffix in ("/webhook/gitcode", "/webhook"):
+            for suffix in ("/webhook/gitcode", "/webhook/gitea", "/webhook/gitlab", "/webhook/github", "/webhook"):
                 if base.endswith(suffix):
                     return base[: -len(suffix)]
             return base
@@ -1917,12 +1933,23 @@ def get_server_base_url() -> str:
     return "http://localhost:8080"
 
 
-def get_webhook_url() -> str:
+def get_webhook_url(request=None) -> str:
     """返回服务端 webhook 地址（GitCode 事件回调注册用，含 /webhook/gitcode 后缀）。
 
-    优先取 configs/server-config.json 显式配置；无则 meta.webhook_url；再兜底空串
-    （不设 localhost 兜底，让 repos.py「webhook_url 未配置即拒」守卫生效）。
+    优先级：
+    1. 显式环境变量 GRAPE_WEBHOOK_URL / WEBHOOK_URL
+    2. 环境变量 GRAPE_SERVER_URL + /webhook/gitcode
+    3. configs/server-config.json 显式配置
+    4. request 请求推导真实访问基址（当有前端/外部请求触发时，直接以用户访问的 Host 为准）
+    5. meta.webhook_url（若非 10.x 内网私网 IP）
+    6. request 推导基址兜底
     """
+    env_wh = (os.environ.get("GRAPE_WEBHOOK_URL") or os.environ.get("WEBHOOK_URL") or "").strip()
+    if env_wh:
+        return env_wh
+    env_server = (os.environ.get("GRAPE_SERVER_URL") or os.environ.get("SERVER_BASE_URL") or "").strip().rstrip("/")
+    if env_server:
+        return env_server + "/webhook/gitcode"
     try:
         from src.config import read_server_config
         _wh = (read_server_config().get("webhook_url") or "").strip()
@@ -1930,10 +1957,32 @@ def get_webhook_url() -> str:
             return _wh
     except Exception:
         pass
+
+    req_base = ""
+    if request is not None:
+        try:
+            proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+            if host:
+                req_base = f"{proto}://{host}".rstrip("/")
+        except Exception:
+            pass
+
+    # 如果有用户实际发起的 HTTP Request 请求，其 Host 即是当前可达的实际服务地址（如 http://172.16.145.202:30404）
+    if req_base:
+        return req_base + "/webhook/gitcode"
+
+    meta_val = ""
     try:
-        return (get_meta_value("webhook_url") or "").strip()
+        meta_val = (get_meta_value("webhook_url") or "").strip()
     except Exception:
-        return ""
+        pass
+
+    # 排除集群内部 Pod 私网 IP (10.x.x.x)
+    if meta_val and not (meta_val.startswith("http://10.") or meta_val.startswith("https://10.")):
+        return meta_val
+
+    return meta_val
 
 
 def migrate_accounts_from_json():
@@ -1955,6 +2004,8 @@ def migrate_accounts_from_json():
             ("github_oauth_client_id", "oauth_github_client_id"),
             ("github_oauth_client_secret", "oauth_github_client_secret"),
             ("github_oauth_redirect_uri", "oauth_github_redirect_uri"),
+            ("server_base_url", "server_base_url"),
+            ("webhook_url", "webhook_url"),
         ]
         loaded = []
         with db_lock:
@@ -1963,8 +2014,10 @@ def migrate_accounts_from_json():
                 if not val:
                     continue
                 c = db.cursor()
-                c.execute("SELECT COUNT(*) FROM meta WHERE key=?", (meta_key,))
-                if c.fetchone()[0] == 0:
+                c.execute("SELECT value FROM meta WHERE key=?", (meta_key,))
+                row = c.fetchone()
+                # 若未设置或之前是 10.x.x.x / 146.x.x.x 等历史自动检测值，且文件有显式配置，则更新
+                if not row or not row[0] or (src_key in ("server_base_url", "webhook_url") and (row[0].startswith("http://10.") or ":8080" in row[0])):
                     c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (meta_key, val))
                     loaded.append(meta_key)
             db.commit()

@@ -169,22 +169,66 @@ _ENGINE_WINDOWS_PATHS: dict[str, list[str]] = {
 }
 
 
-def engine_search_paths(engine_name: str) -> list[str]:
-    """引擎 CLI 在 Windows 上的常见安装路径（仅 Windows 调用）。
+_ENGINE_UNIX_PATHS: dict[str, list[str]] = {
+    # ~ 在调用时展开（容器内 HOME=/root，用户机 HOME=$HOME）
+    "opencode": [
+        "~/.opencode/bin/opencode",       # opencode 官方安装脚本默认位置
+        "/usr/local/bin/opencode",
+        "/usr/bin/opencode",
+        "/opt/opencode/bin/opencode",
+        "~/.local/bin/opencode",
+    ],
+    "codearts": [
+        "/usr/local/bin/codearts",
+        "/usr/bin/codearts",
+        "~/.local/bin/codearts",
+    ],
+    "hermes": [
+        "~/.hermes/bin/hermes",
+        "/usr/local/bin/hermes",
+        "/usr/bin/hermes",
+        "~/.local/bin/hermes",
+    ],
+    "codex": [
+        "/usr/local/bin/codex",
+        "/usr/bin/codex",
+        "~/.local/bin/codex",
+    ],
+    "cursor": [],
+}
 
-    返回路径列表，调用方逐一检查 isfile。
+
+def engine_search_paths(engine_name: str) -> list[str]:
+    """引擎 CLI 的常见安装路径（当前平台）。
+
+    Windows: 返回常见安装目录列表（逐一检查 isfile）。
+    Unix: PATH 之外补充常见安装位置（如 ~/.opencode/bin、/usr/local/bin），
+          覆盖容器/精简 PATH 环境下 CLI 不在 PATH 中的场景。
     """
-    if not _IS_WINDOWS:
-        return []
-    return [p for p in _ENGINE_WINDOWS_PATHS.get((engine_name or "").lower(), []) if p]
+    name = (engine_name or "").lower()
+    if _IS_WINDOWS:
+        return [p for p in _ENGINE_WINDOWS_PATHS.get(name, []) if p]
+    out = []
+    home = home_dir()
+    for p in _ENGINE_UNIX_PATHS.get(name, []):
+        p = p.replace("~", home, 1) if p.startswith("~") else p
+        if p:
+            out.append(p)
+    return out
 
 
 def find_cli(cli_name: str) -> str:
     """查找 CLI 路径（跨平台）。
 
-    优先级：PATH (which) → Windows 常见安装路径。
+    优先级：显式环境变量（GRAPE_ENGINE_<NAME>_BIN / <NAME>_BIN，如 OPENCODE_BIN）
+    → PATH (which) → 当前平台常见安装路径。
     返回空字符串表示未找到。
     """
+    _upper = (cli_name or "").upper()
+    for env_key in (f"GRAPE_ENGINE_{_upper}_BIN", f"{_upper}_BIN"):
+        p = (os.environ.get(env_key) or "").strip()
+        if p and os.path.isfile(p):
+            return p
     path = which(cli_name)
     if path:
         return path

@@ -258,6 +258,8 @@
       $2('f_github_oauth_redirect_uri').value = c.github_oauth_redirect_uri || '';
       $2('f_github_oauth_redirect_uri').placeholder = '留空自动推断';
       $2('f_bot_usernames').value = (c.bot_usernames || []).join(', ');
+      $2('f_server_base_url').value = c.server_base_url || '';
+      $2('f_webhook_url').value = c.webhook_url || '';
 
       // GitLab 配置
       $2('f_gitlab_mode').value = c.gitlab_mode || 'single';
@@ -300,6 +302,10 @@
     if (ghRedirect) body.github_oauth_redirect_uri = ghRedirect;
     var us = $2('f_bot_usernames').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
     if (us.length) body.bot_usernames = us;
+    var sbUrl = $2('f_server_base_url').value.trim();
+    if (sbUrl) body.server_base_url = sbUrl;
+    var whUrl = $2('f_webhook_url').value.trim();
+    if (whUrl) body.webhook_url = whUrl;
 
     // 收集 GitLab 配置
     body.gitlab_mode = $2('f_gitlab_mode').value;

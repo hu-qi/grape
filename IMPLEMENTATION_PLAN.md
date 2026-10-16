@@ -83,6 +83,19 @@
 **Tests**: `node -c src/api/static/js/app.js` syntax check passed; regression test suite `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_gitea_gitlab_issues.py`, `test_git_provider.py`, `test_host_status.py` (74 passed).
 **Status**: Completed
 
+## Stage 12: Webhook base URL pollution fix & container engine detection
+**Goal**: Fix hosted-repo webhook being registered with a wrong auto-detected address (`http://10.0.0.52:8080/webhook/gitea` — a K8s Pod private-IP/egress artifact) and the server Pod's local engine (`opencode-grape-6dbd7bf9f4-hcpxt`) showing offline on `/#runtimes`.
+**Success Criteria**:
+- `src/user/db.py`: `get_webhook_url(request)` / `get_server_base_url(request)` become request-aware — when a user request arrives, its Host/X-Forwarded-Host is preferred; meta values pointing at `10.x` private IPs are rejected; env overrides `GRAPE_WEBHOOK_URL`/`GRAPE_SERVER_URL` take top priority.
+- `src/config.py`: `_detect_server_base()` honours env vars and never auto-detects `10.x` Pod IPs.
+- `src/api/routes/repos.py`: `create_new_repo`, `host_repo`, `repair_host` pass the live `Request` so webhooks register with the actually reachable base (e.g. `http://172.16.145.202:30404/webhook/gitea`).
+- Admin console: `server_base_url` / `webhook_url` become editable, persisted to `global-bot-token.json` + meta table, and seeded via `global-bot-token.seed.json` (`http://172.16.145.202:30404`).
+- `src/runtime/os_adapter.py`: `find_cli` gains a Unix common-install-path fallback (`~/.opencode/bin`, `/usr/local/bin`, …) plus `GRAPE_ENGINE_<NAME>_BIN` / `<NAME>_BIN` env overrides, so engines installed off-PATH are detected instead of showing offline.
+- `Dockerfile`: installs opencode CLI into `/root/.opencode/bin` so the server Pod's local engine probes healthy.
+**Tests**: `test_os_adapter.py` (updated `test_unix_returns_paths`), `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_repos_remove_cleanup.py` — 93 passed.
+**Status**: Completed
+
+
 
 
 

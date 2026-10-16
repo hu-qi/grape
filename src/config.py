@@ -214,6 +214,9 @@ def _load_accounts():
             ACCOUNTS[a["name"]] = a
         # 自动检测并填入 webhook_url / server_base_url（全局配置 → meta 表）
         def _detect_server_base():
+            env_url = (os.environ.get("GRAPE_SERVER_URL") or os.environ.get("SERVER_BASE_URL") or "").strip().rstrip("/")
+            if env_url:
+                return env_url
             methods = [
                 "https://api.ipify.org?format=json",
                 "http://api.ipify.org?format=json",
@@ -231,7 +234,7 @@ def _load_accounts():
             try:
                 hostname = socket.gethostname()
                 ip = socket.gethostbyname(hostname)
-                if ip and not ip.startswith("127.") and not ip.startswith("192.168."):
+                if ip and not ip.startswith("127.") and not ip.startswith("192.168.") and not ip.startswith("10."):
                     return f"http://{ip}:8080"
             except:
                 pass

@@ -28,6 +28,8 @@ ALL_FIELDS = [
     "gitea_mode",
     "gitea_default_instance",
     "gitea_instances",
+    "server_base_url",
+    "webhook_url",
 ]
 
 # 同步到 meta 表的映射：文件 key -> meta key（仅 OAuth 部分走 meta）
@@ -38,6 +40,8 @@ _META_SYNC_MAP = {
     "github_oauth_client_id": "oauth_github_client_id",
     "github_oauth_client_secret": "oauth_github_client_secret",
     "github_oauth_redirect_uri": "oauth_github_redirect_uri",
+    "server_base_url": "server_base_url",
+    "webhook_url": "webhook_url",
 }
 
 
@@ -101,7 +105,8 @@ def read_public_config() -> dict:
             out["{}_tail".format(field)] = tail
             # 非敏感字段回显明文：client_id / redirect_uri（URL）便于前端回填
             if field in ("gitcode_oauth_client_id", "github_oauth_client_id",
-                         "gitcode_oauth_redirect_uri", "github_oauth_redirect_uri"):
+                         "gitcode_oauth_redirect_uri", "github_oauth_redirect_uri",
+                         "server_base_url", "webhook_url"):
                 out[field] = val
     # oauth_status 汇总（前端直接展示三态）
     out["oauth_status"] = {

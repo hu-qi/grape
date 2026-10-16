@@ -107,9 +107,13 @@ class TestFindCli:
 
 
 class TestEngineSearchPaths:
-    def test_unix_returns_empty(self):
+    def test_unix_returns_paths(self):
+        """Unix 下也返回常见安装路径（容器/精简 PATH 环境回退，不再为空）。"""
         with patch.object(os_adapter, "_IS_WINDOWS", False):
-            assert os_adapter.engine_search_paths("opencode") == []
+            paths = os_adapter.engine_search_paths("opencode")
+            assert isinstance(paths, list)
+            assert len(paths) > 0
+            assert all(not p.startswith("~") for p in paths)  # ~ 已展开
 
     def test_windows_returns_paths(self):
         with patch.object(os_adapter, "_IS_WINDOWS", True):

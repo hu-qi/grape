@@ -198,6 +198,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans
       </div>
 
       <div class="card">
+        <div class="card-h"><h2>系统网络与回调基址<span class="tag">Webhook & Server Base</span></h2></div>
+        <div class="f-row"><label>server_base_url</label><input id="f_server_base_url" placeholder="如 http://172.16.145.202:30404，留空自动检测"></div>
+        <div class="f-row"><label>webhook_url</label><input id="f_webhook_url" placeholder="如 http://172.16.145.202:30404/webhook/gitcode，留空根据请求或基址推断"></div>
+        <div class="hint">托管 Gitea/GitLab/GitHub 仓库自动配置 Webhook 时的回调基准地址。防止 K8s Pod 误将内部私网 IP（如 10.x.x.x）填入 Webhook。</div>
+      </div>
+
+      <div class="card">
         <div class="card-h"><h2>Bot 账户<span class="tag">self-comment 检测</span></h2></div>
         <div class="f-row"><label>bot_usernames</label><input id="f_bot_usernames" placeholder="逗号分隔，如 grape_bot, dev-bot"></div>
         <div class="hint">手动填写或点击上方「校验」后用返回的用户名自动回填</div>

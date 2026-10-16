@@ -525,7 +525,7 @@ def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
 
 
 @router.post("/create", operation_id="repos_create", summary="Create repository (optionally auto-host)", description="Creates a repository via the VCS API; optionally auto-hosts it afterwards.")
-def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_session_token)):
+def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_session_token), request: Request = None):
     """通过 VCS API 新建仓库，可选创建后自动托管"""
     import re as _re
     from src.repo_key import to_repo_key
@@ -589,7 +589,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
 
     if body.host_after_create:
         from src.user.db import get_webhook_url
-        webhook_url = get_webhook_url()
+        webhook_url = get_webhook_url(request=request)
         if not webhook_url:
             raise HTTPException(status_code=400, detail={"code": 400, "message": "webhook_url 未配置，无法托管"})
         if provider == "github":
@@ -738,7 +738,7 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
     login_inst = user.get("login_instance", "")
     provider, api_token = _get_user_provider_and_token(user["username"], login_prov, login_instance=login_inst)
     from src.user.db import get_webhook_url
-    webhook_url = get_webhook_url()
+    webhook_url = get_webhook_url(request=request)
     # 根据 provider 分发 webhook 路由
     if provider == "github":
         webhook_url = webhook_url.replace("/webhook/gitcode", "/webhook/github")
@@ -960,7 +960,7 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
 
 
 @router.post("/{owner}/{repo}/repair-host", operation_id="repos_repair_host", summary="Repair hosting", description="Self-heals an unfinished hosting flow (bot not joined / webhook missing). Idempotent; uses owner-token invite + bot-token webhook, skipping the invite when the bot is already a maintainer.")
-def repair_host(owner: str, repo: str, user: dict = Depends(require_no_session_token)):
+def repair_host(owner: str, repo: str, user: dict = Depends(require_no_session_token), request: Request = None):
     """方案 F-4：自愈未完成的托管流程（bot 未加入 / webhook 未创建），幂等。
 
     流程：需要 owner token 邀请 + bot token 建 webhook；判定 bot 已是维护者则跳过邀请；
@@ -983,7 +983,7 @@ def repair_host(owner: str, repo: str, user: dict = Depends(require_no_session_t
     bot_token, bot_username = get_global_bot_credential()
     if not api_token or not bot_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "缺少 API Token，无法自愈"})
-    webhook_url = get_webhook_url()
+    webhook_url = get_webhook_url(request=request)
 
     # 1) bot 是否已是维护者（bot token 自查）
     bot_ok = False
