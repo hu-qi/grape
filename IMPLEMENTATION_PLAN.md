@@ -95,6 +95,24 @@
 **Tests**: `test_os_adapter.py` (updated `test_unix_returns_paths`), `test_gitlab_login.py`, `test_gitea_login.py`, `test_gitea_gitlab_repos.py`, `test_repos_remove_cleanup.py` — 93 passed.
 **Status**: Completed
 
+## Stage 13: Admin config save hang fix & Gitea/GitLab instance initialization
+**Goal**: Fix the unresponsive bug when clicking "保存配置" on `http://172.16.145.202:30404/admin`, and securely initialize Gitea (`private_gitea`) and GitLab (`cndatacom`) instances without leaking tokens to git.
+**Success Criteria**:
+- Root cause diagnosed: When instance container is empty, placeholder tip `<div>` was selected by `querySelector('#gitlab_instances_container > div')`, causing `row.querySelector('.gl_id').value` to throw `TypeError: Cannot read properties of null (reading 'value')`. The unhandled exception halted execution and left `saveBtn` disabled permanently.
+- `src/api/static/js/admin.js`:
+  - Instance cards now use dedicated class names (`gl-instance-card`, `gt-instance-card`).
+  - Added safe element query and null checks for all input fields; invalid/empty IDs are safely skipped.
+  - Wrapped `saveConfig()` in `try ... catch ... finally` to ensure user feedback and prevent button locking.
+  - Enhanced `api()` error response parsing for string, array, and non-JSON payloads.
+- `src/api/static/admin.html`: Bumped script version query string (`?v=20261016-2`) to invalidate browser caches.
+- Gitea & GitLab instances initialized securely:
+  - Private Gitea `private_gitea` (`http://172.16.145.202:30344`, token verified for user `dev`).
+  - GitLab `cndatacom` (`https://gitlab.devops.cndatacom.com`, token verified for user `9527`).
+  - Sensitive tokens kept exclusively in `.gitignore` protected `configs/global-bot-token.json` and online DB meta storage; no secrets committed to git.
+  - Verified live at `/api/auth/gitlab/instances` and `/api/auth/gitea/instances`.
+**Tests**: Node syntax validation on `admin.js`; live API verification for Gitea and GitLab token resolution and admin configuration reload.
+**Status**: Completed
+
 
 
 

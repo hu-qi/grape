@@ -27,8 +27,31 @@
     if (tk && path.indexOf('/login') < 0) opts.headers['Authorization'] = 'Bearer ' + tk;
     if (opts.body && typeof opts.body === 'object') opts.body = JSON.stringify(opts.body);
     return fetch('/api/admin' + path, opts).then(function (r) {
-      return r.json().then(function (data) {
-        if (!r.ok) { var e = new Error(data && data.detail && data.detail.message) || '请求失败'; e.status = r.status; throw e; }
+      return r.text().then(function (raw) {
+        var data;
+        try {
+          data = JSON.parse(raw);
+        } catch (_) {
+          data = { message: raw || ('HTTP ' + r.status) };
+        }
+        if (!r.ok) {
+          var msg = '请求失败';
+          if (data) {
+            if (typeof data.detail === 'string') {
+              msg = data.detail;
+            } else if (data.detail && typeof data.detail.message === 'string') {
+              msg = data.detail.message;
+            } else if (Array.isArray(data.detail) && data.detail.length > 0) {
+              msg = data.detail.map(function (it) { return it.msg || JSON.stringify(it); }).join('; ');
+            } else if (data.message) {
+              msg = data.message;
+            }
+          }
+          var e = new Error(msg);
+          e.status = r.status;
+          e.data = data;
+          throw e;
+        }
         return data;
       });
     });
@@ -91,6 +114,7 @@
     }
     _gitlabInstances.forEach(function (inst, idx) {
       var itemDiv = document.createElement('div');
+      itemDiv.className = 'gl-instance-card';
       itemDiv.style.cssText = 'border:1px solid #e3e6ee;border-radius:8px;padding:12px;margin-bottom:10px;background:#fcfdfe;';
       var authMode = inst.auth_mode || (inst.enabled === false ? 'none' : (inst.allow_token_login ? 'token' : 'oauth'));
       itemDiv.innerHTML = [
@@ -167,6 +191,7 @@
     }
     _giteaInstances.forEach(function (inst, idx) {
       var itemDiv = document.createElement('div');
+      itemDiv.className = 'gt-instance-card';
       itemDiv.style.cssText = 'border:1px solid #e3e6ee;border-radius:8px;padding:12px;margin-bottom:10px;background:#fcfdfe;';
       var authMode = inst.auth_mode || (inst.enabled === false ? 'none' : (inst.allow_token_login ? 'token' : 'oauth'));
       itemDiv.innerHTML = [
@@ -282,112 +307,143 @@
   }
 
   function saveConfig() {
-    $2('saveBtn').disabled = true;
-    var body = {};
-    var gitcodeTok = $2('f_gitcode_api_token').value.trim();
-    var githubTok = $2('f_github_bot_token').value.trim();
-    if (gitcodeTok) body.gitcode_api_token = gitcodeTok;
-    if (githubTok) body.github_bot_token = githubTok;
-    var gcdClientId = $2('f_gitcode_oauth_client_id').value.trim();
-    if (gcdClientId && gcdClientId.indexOf('●') < 0) body.gitcode_oauth_client_id = gcdClientId;
-    var gcdClientSec = $2('f_gitcode_oauth_client_secret').value.trim();
-    if (gcdClientSec) body.gitcode_oauth_client_secret = gcdClientSec;
-    var gcdRedirect = $2('f_gitcode_oauth_redirect_uri').value.trim();
-    if (gcdRedirect) body.gitcode_oauth_redirect_uri = gcdRedirect;
-    var ghClientId = $2('f_github_oauth_client_id').value.trim();
-    if (ghClientId && ghClientId.indexOf('●') < 0) body.github_oauth_client_id = ghClientId;
-    var ghClientSec = $2('f_github_oauth_client_secret').value.trim();
-    if (ghClientSec) body.github_oauth_client_secret = ghClientSec;
-    var ghRedirect = $2('f_github_oauth_redirect_uri').value.trim();
-    if (ghRedirect) body.github_oauth_redirect_uri = ghRedirect;
-    var us = $2('f_bot_usernames').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    if (us.length) body.bot_usernames = us;
-    var sbUrl = $2('f_server_base_url').value.trim();
-    if (sbUrl) body.server_base_url = sbUrl;
-    var whUrl = $2('f_webhook_url').value.trim();
-    if (whUrl) body.webhook_url = whUrl;
+    var saveBtn = $2('saveBtn');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      var body = {};
+      var gitcodeTok = $2('f_gitcode_api_token') ? $2('f_gitcode_api_token').value.trim() : '';
+      var githubTok = $2('f_github_bot_token') ? $2('f_github_bot_token').value.trim() : '';
+      if (gitcodeTok) body.gitcode_api_token = gitcodeTok;
+      if (githubTok) body.github_bot_token = githubTok;
+      var gcdClientId = $2('f_gitcode_oauth_client_id') ? $2('f_gitcode_oauth_client_id').value.trim() : '';
+      if (gcdClientId && gcdClientId.indexOf('●') < 0) body.gitcode_oauth_client_id = gcdClientId;
+      var gcdClientSec = $2('f_gitcode_oauth_client_secret') ? $2('f_gitcode_oauth_client_secret').value.trim() : '';
+      if (gcdClientSec) body.gitcode_oauth_client_secret = gcdClientSec;
+      var gcdRedirect = $2('f_gitcode_oauth_redirect_uri') ? $2('f_gitcode_oauth_redirect_uri').value.trim() : '';
+      if (gcdRedirect) body.gitcode_oauth_redirect_uri = gcdRedirect;
+      var ghClientId = $2('f_github_oauth_client_id') ? $2('f_github_oauth_client_id').value.trim() : '';
+      if (ghClientId && ghClientId.indexOf('●') < 0) body.github_oauth_client_id = ghClientId;
+      var ghClientSec = $2('f_github_oauth_client_secret') ? $2('f_github_oauth_client_secret').value.trim() : '';
+      if (ghClientSec) body.github_oauth_client_secret = ghClientSec;
+      var ghRedirect = $2('f_github_oauth_redirect_uri') ? $2('f_github_oauth_redirect_uri').value.trim() : '';
+      if (ghRedirect) body.github_oauth_redirect_uri = ghRedirect;
+      var botUsernamesEl = $2('f_bot_usernames');
+      var us = botUsernamesEl ? botUsernamesEl.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+      if (us.length) body.bot_usernames = us;
+      var sbUrl = $2('f_server_base_url') ? $2('f_server_base_url').value.trim() : '';
+      if (sbUrl) body.server_base_url = sbUrl;
+      var whUrl = $2('f_webhook_url') ? $2('f_webhook_url').value.trim() : '';
+      if (whUrl) body.webhook_url = whUrl;
 
-    // 收集 GitLab 配置
-    body.gitlab_mode = $2('f_gitlab_mode').value;
-    body.gitlab_default_instance = $2('f_gitlab_default_instance').value.trim();
-    var glRows = document.querySelectorAll('#gitlab_instances_container > div');
-    var glList = [];
-    for (var i = 0; i < glRows.length; i++) {
-      var row = glRows[i];
-      var key = (row.querySelector('.gl_id').value || '').trim();
-      var name = (row.querySelector('.gl_name').value || '').trim();
-      var base = (row.querySelector('.gl_base_url').value || '').trim();
-      var cid = (row.querySelector('.gl_client_id').value || '').trim();
-      var csec = (row.querySelector('.gl_client_secret').value || '').trim();
-      var ruri = (row.querySelector('.gl_redirect_uri').value || '').trim();
-      var tok = row.querySelector('.gl_token') ? (row.querySelector('.gl_token').value || '').trim() : '';
+      // 收集 GitLab 配置
+      if ($2('f_gitlab_mode')) body.gitlab_mode = $2('f_gitlab_mode').value;
+      if ($2('f_gitlab_default_instance')) body.gitlab_default_instance = $2('f_gitlab_default_instance').value.trim();
+      var glRows = document.querySelectorAll('#gitlab_instances_container .gl-instance-card');
+      var glList = [];
+      for (var i = 0; i < glRows.length; i++) {
+        var row = glRows[i];
+        var idEl = row.querySelector('.gl_id');
+        if (!idEl) continue;
+        var key = (idEl.value || '').trim();
+        if (!key) continue;
+        var nameEl = row.querySelector('.gl_name');
+        var name = (nameEl ? nameEl.value : '').trim();
+        var baseEl = row.querySelector('.gl_base_url');
+        var base = (baseEl ? baseEl.value : '').trim();
+        var cidEl = row.querySelector('.gl_client_id');
+        var cid = (cidEl ? cidEl.value : '').trim();
+        var csecEl = row.querySelector('.gl_client_secret');
+        var csec = (csecEl ? csecEl.value : '').trim();
+        var ruriEl = row.querySelector('.gl_redirect_uri');
+        var ruri = (ruriEl ? ruriEl.value : '').trim();
+        var tokEl = row.querySelector('.gl_token');
+        var tok = (tokEl ? tokEl.value : '').trim();
 
-      var glRadios = row.querySelectorAll('input[type="radio"][name^="gl_auth_mode_"]');
-      var glAuthMode = 'none';
-      for (var rIdx = 0; rIdx < glRadios.length; rIdx++) {
-        if (glRadios[rIdx].checked) { glAuthMode = glRadios[rIdx].value; break; }
+        var glRadios = row.querySelectorAll('input[type="radio"][name^="gl_auth_mode_"]');
+        var glAuthMode = 'none';
+        for (var rIdx = 0; rIdx < glRadios.length; rIdx++) {
+          if (glRadios[rIdx].checked) { glAuthMode = glRadios[rIdx].value; break; }
+        }
+
+        var allowedEl = row.querySelector('.gl_allowed_usernames');
+        var allowed = (allowedEl && allowedEl.value ? allowedEl.value : '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+        glList.push({
+          id: key,
+          name: name || key,
+          base_url: base,
+          auth_mode: glAuthMode,
+          enabled: (glAuthMode !== 'none'),
+          allow_token_login: (glAuthMode === 'token'),
+          client_id: cid,
+          client_secret: csec, // 若留空，后端会保留 previous_item 的 secret
+          redirect_uri: ruri,
+          token: tok,           // 若留空，后端会保留 previous_item 的 token
+          allowed_usernames: allowed
+        });
       }
+      body.gitlab_instances = glList;
 
-      var allowed = (row.querySelector('.gl_allowed_usernames').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-      glList.push({
-        id: key,
-        name: name || key,
-        base_url: base,
-        auth_mode: glAuthMode,
-        enabled: (glAuthMode !== 'none'),
-        allow_token_login: (glAuthMode === 'token'),
-        client_id: cid,
-        client_secret: csec, // 若留空，后端会保留 previous_item 的 secret
-        redirect_uri: ruri,
-        token: tok,           // 若留空，后端会保留 previous_item 的 token
-        allowed_usernames: allowed
-      });
-    }
-    body.gitlab_instances = glList;
+      // 收集 Gitea 配置
+      if ($2('f_gitea_mode')) body.gitea_mode = $2('f_gitea_mode').value;
+      if ($2('f_gitea_default_instance')) body.gitea_default_instance = $2('f_gitea_default_instance').value.trim();
+      var gtRows = document.querySelectorAll('#gitea_instances_container .gt-instance-card');
+      var gtList = [];
+      for (var j = 0; j < gtRows.length; j++) {
+        var gtRow = gtRows[j];
+        var gtIdEl = gtRow.querySelector('.gt_id');
+        if (!gtIdEl) continue;
+        var gtKey = (gtIdEl.value || '').trim();
+        if (!gtKey) continue;
+        var gtNameEl = gtRow.querySelector('.gt_name');
+        var gtName = (gtNameEl ? gtNameEl.value : '').trim();
+        var gtBaseEl = gtRow.querySelector('.gt_base_url');
+        var gtBase = (gtBaseEl ? gtBaseEl.value : '').trim();
+        var gtCidEl = gtRow.querySelector('.gt_client_id');
+        var gtCid = (gtCidEl ? gtCidEl.value : '').trim();
+        var gtCsecEl = gtRow.querySelector('.gt_client_secret');
+        var gtCsec = (gtCsecEl ? gtCsecEl.value : '').trim();
+        var gtRuriEl = gtRow.querySelector('.gt_redirect_uri');
+        var gtRuri = (gtRuriEl ? gtRuriEl.value : '').trim();
+        var gtTokEl = gtRow.querySelector('.gt_token');
+        var gtTok = (gtTokEl ? gtTokEl.value : '').trim();
 
-    // 收集 Gitea 配置
-    body.gitea_mode = $2('f_gitea_mode').value;
-    body.gitea_default_instance = $2('f_gitea_default_instance').value.trim();
-    var gtRows = document.querySelectorAll('#gitea_instances_container > div');
-    var gtList = [];
-    for (var j = 0; j < gtRows.length; j++) {
-      var gtRow = gtRows[j];
-      var gtKey = (gtRow.querySelector('.gt_id').value || '').trim();
-      var gtName = (gtRow.querySelector('.gt_name').value || '').trim();
-      var gtBase = (gtRow.querySelector('.gt_base_url').value || '').trim();
-      var gtCid = (gtRow.querySelector('.gt_client_id').value || '').trim();
-      var gtCsec = (gtRow.querySelector('.gt_client_secret').value || '').trim();
-      var gtRuri = (gtRow.querySelector('.gt_redirect_uri').value || '').trim();
-      var gtTok = gtRow.querySelector('.gt_token') ? (gtRow.querySelector('.gt_token').value || '').trim() : '';
+        var gtRadios = gtRow.querySelectorAll('input[type="radio"][name^="gt_auth_mode_"]');
+        var gtAuthMode = 'none';
+        for (var gIdx = 0; gIdx < gtRadios.length; gIdx++) {
+          if (gtRadios[gIdx].checked) { gtAuthMode = gtRadios[gIdx].value; break; }
+        }
 
-      var gtRadios = gtRow.querySelectorAll('input[type="radio"][name^="gt_auth_mode_"]');
-      var gtAuthMode = 'none';
-      for (var gIdx = 0; gIdx < gtRadios.length; gIdx++) {
-        if (gtRadios[gIdx].checked) { gtAuthMode = gtRadios[gIdx].value; break; }
+        var gtAllowedEl = gtRow.querySelector('.gt_allowed_usernames');
+        var gtAllowed = (gtAllowedEl && gtAllowedEl.value ? gtAllowedEl.value : '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+        gtList.push({
+          id: gtKey,
+          name: gtName || gtKey,
+          base_url: gtBase,
+          auth_mode: gtAuthMode,
+          enabled: (gtAuthMode !== 'none'),
+          allow_token_login: (gtAuthMode === 'token'),
+          client_id: gtCid,
+          client_secret: gtCsec,
+          redirect_uri: gtRuri,
+          token: gtTok,
+          allowed_usernames: gtAllowed
+        });
       }
+      body.gitea_instances = gtList;
 
-      var gtAllowed = (gtRow.querySelector('.gt_allowed_usernames').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-      gtList.push({
-        id: gtKey,
-        name: gtName || gtKey,
-        base_url: gtBase,
-        auth_mode: gtAuthMode,
-        enabled: (gtAuthMode !== 'none'),
-        allow_token_login: (gtAuthMode === 'token'),
-        client_id: gtCid,
-        client_secret: gtCsec,
-        redirect_uri: gtRuri,
-        token: gtTok,
-        allowed_usernames: gtAllowed
+      api('/config', { method: 'PUT', body: body }).then(function (d) {
+        toast('配置已保存', true);
+        showCfg();
+      }).catch(function (e) {
+        toast('保存失败: ' + e.message, false);
+      }).finally(function () {
+        if (saveBtn) saveBtn.disabled = false;
       });
+    } catch (err) {
+      console.error('saveConfig error:', err);
+      toast('保存异常: ' + (err.message || err), false);
+      if (saveBtn) saveBtn.disabled = false;
     }
-    body.gitea_instances = gtList;
-
-    api('/config', { method: 'PUT', body: body }).then(function (d) {
-      toast('配置已保存', true);
-      showCfg();
-    }).catch(function (e) { toast('保存失败: ' + e.message, false); })
-      .finally(function () { $2('saveBtn').disabled = false; });
   }
 
   function verifyToken(provider, fieldId) {
