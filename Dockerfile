@@ -8,8 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # opencode CLI（本机直连引擎探测需要：find_cli → probe --version）
-# 官方安装脚本将二进制放到 /root/.opencode/bin/opencode（os_adapter.find_cli 的 Unix 回退路径覆盖）
-RUN curl -fsSL https://opencode.ai/install | bash
+# 官方安装脚本将二进制放到 /root/.opencode/bin/opencode（os_adapter.find_cli 的 Unix 回退路径覆盖）。
+# 容错：内网构建环境若不可达 opencode.ai 则跳过（不阻断流水线），运行期引擎仍可经 PATH/回退路径探测。
+RUN (curl -fsSL https://opencode.ai/install | bash) || echo "[docker] opencode install skipped (network unreachable)"
 ENV PATH="/root/.opencode/bin:${PATH}"
 
 # Python 依赖
