@@ -1418,16 +1418,42 @@ def update_managed_repo_bot_username(repo_key: str, bot_username: str) -> bool:
         return False
 
 
-def get_bot_token_by_repo(repo_owner: str, repo_name: str) -> str:
-    """按 owner/repo 查仓库 bot token（内部按带前缀 repo_key 命中）"""
-    from src.repo_key import to_repo_key
-    repo_key = to_repo_key(f"{repo_owner}/{repo_name}")
-    with db_lock:
-        c = db.cursor()
-        c.execute("SELECT bot_gitcode_token FROM managed_repos WHERE repo_key=? AND bot_gitcode_token!='' LIMIT 1", (repo_key,))
-        row = c.fetchone()
-        if row:
-            return row[0]
+def get_bot_token_by_repo(repo_owner: str, repo_name: str, provider: str = "") -> str:
+    """按 owner/repo 查仓库 bot token（跨平台候选命中）。
+
+    2026-10-21 修复：旧实现用 to_repo_key() 拼 key，而该函数默认 provider='gitcode'
+    → 写入时 repo_key 带真实前缀（gitea:/gitlab:/github:）的仓库永远查不到，
+    仓库级 bot token 恒为空，派发时 dependency check 报 repo_gitcode_token 为空。
+    现按四平台候选查询（显式传 provider 时优先），token 落在
+    bot_gitcode_token / bot_github_token 两列（各平台接入时统一写 bot_gitcode_token）。
+    """
+    base = f"{repo_owner}/{repo_name}" if repo_owner and repo_name else (repo_owner or repo_name)
+    if not base:
+        return ""
+    from src.repo_key import cross_provider_keys
+    keys = cross_provider_keys(base)
+    if provider:
+        _pref = f"{provider}:{base}"
+        keys = [_pref] + [k for k in keys if k != _pref]
+    try:
+        _ph = ",".join("?" * len(keys))
+        with db_lock:
+            c = db.cursor()
+            c.execute(
+                "SELECT repo_key, bot_gitcode_token, bot_github_token FROM managed_repos "
+                f"WHERE repo_key IN ({_ph})", tuple(keys))
+            rows = c.fetchall()
+    except Exception as e:
+        log.warning(f"get_bot_token_by_repo: query failed: {e}")
+        return ""
+    _by_key = {r[0]: r for r in rows}
+    for _k in keys:  # 按候选优先级返回第一个非空
+        _r = _by_key.get(_k)
+        if not _r:
+            continue
+        for _tok in (_r[1], _r[2]):
+            if _tok:
+                return _tok
     return ""
 
 
@@ -1457,48 +1483,107 @@ def get_repo_bot_token_no_global(repo_key: str) -> str:
     return ""
 
 
-def _get_global_bot_token() -> str:
-    """读取全局 bot token（configs/global-bot-token.json）"""
+def _load_global_bot_config() -> dict:
+    """读取 configs/global-bot-token.json（文件是唯一权威源，见 src/admin/config_store.py）"""
     import json, os
     try:
         _gbt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "configs", "global-bot-token.json")
         if os.path.exists(_gbt_path):
             with open(_gbt_path, "r", encoding="utf-8") as f:
-                return json.load(f).get("gitcode_api_token", "") or ""
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
     except Exception as e:
-        log.warning(f"Failed to load global bot token: {e}")
+        log.warning(f"Failed to load global bot config: {e}")
+    return {}
+
+
+def _instance_token(cfg: dict, provider: str) -> str:
+    """从 gitea_instances / gitlab_instances 取实例级系统 token（优先 default_instance）。"""
+    _insts = cfg.get(f"{provider}_instances") or []
+    _default = cfg.get(f"{provider}_default_instance") or ""
+    for _it in _insts:
+        if not isinstance(_it, dict):
+            continue
+        if _default and _it.get("id") == _default and _it.get("token"):
+            return _it["token"]
+    for _it in _insts:
+        if isinstance(_it, dict) and _it.get("token") and _it.get("enabled", True):
+            return _it["token"]
     return ""
 
 
-def get_gitcode_token(repo_key: str = "", user_id: int = 0) -> str:
-    """统一获取 GitCode API Token。
+def get_global_token_for_provider(provider: str = "gitcode") -> str:
+    """按平台取全局/实例级兜底 token。
 
-    - repo_key 非空 → bot token：devops_agent_session.repo_gitcode_token
-      → managed_repos.bot_gitcode_token（get_bot_token_by_repo）→ 全局 bot token
+    Gitea/GitLab 没有独立的仓库 bot token 配置，兜底用实例配置里的系统 token
+    （gitea_instances/gitlab_instances 的 token 字段，管理员在设置页配置）。
+    """
+    if provider == "github":
+        return _load_global_bot_config().get("github_bot_token", "") or ""
+    if provider in ("gitea", "gitlab"):
+        return _instance_token(_load_global_bot_config(), provider)
+    return _get_global_bot_token()
+
+
+def _get_global_bot_token() -> str:
+    """读取全局 bot token（configs/global-bot-token.json，gitcode 分支）"""
+    return _load_global_bot_config().get("gitcode_api_token", "") or ""
+
+
+def get_repo_bot_token(repo_key: str) -> str:
+    """仓库 bot token 单一入口：按 repo_key 的真实 provider 解析（跨平台候选 + 实例级兜底）。
+
+    解析顺序（与旧 get_gitcode_token 一致，但平台感知）：
+      1. devops_agent_session.repo_gitcode_token（Agent 配置，跨平台候选）
+      2. managed_repos.bot_gitcode_token / bot_github_token（仓库配置，跨平台候选）
+      3. 全局/实例级：gitcode_api_token / github_bot_token / gitea|gitlab_instances[].token
+
+    2026-10-21 修复：旧实现只在 github: 与「其它」两条分支分流，gitea:/gitlab: 仓库
+    既查不到仓库级 token 也没有兜底 → repo_gitcode_token 恒空，vod/issue/coding/qa/sre
+    派发全被 dependency_check 拦下。
+    """
+    from src.repo_key import parse_repo_key, cross_provider_keys
+    if not repo_key:
+        return ""
+    provider, owner, name = parse_repo_key(repo_key)
+    base = f"{owner}/{name}" if owner and name else repo_key
+    keys = cross_provider_keys(base)
+    if provider:
+        _pref = f"{provider}:{base}"
+        keys = [_pref] + [k for k in keys if k != _pref]
+    # 1. devops_agent_session.repo_gitcode_token（agent 专属配置）
+    try:
+        _ph = ",".join("?" * len(keys))
+        with db_lock:
+            c = db.cursor()
+            c.execute(
+                "SELECT repo_key, repo_gitcode_token FROM devops_agent_session "
+                f"WHERE repo_key IN ({_ph}) AND repo_gitcode_token IS NOT NULL "
+                "AND repo_gitcode_token!=''",
+                tuple(keys))
+            _rows = {r[0]: r[1] for r in c.fetchall()}
+        for _k in keys:
+            if _rows.get(_k):
+                return _rows[_k]
+    except Exception as e:
+        log.warning(f"get_repo_bot_token: query devops_agent_session failed: {e}")
+    # 2. managed_repos（仓库级配置）
+    tok = get_bot_token_by_repo(owner, name, provider=provider)
+    if tok:
+        return tok
+    # 3. 全局/实例级兜底
+    return get_global_token_for_provider(provider or "gitcode")
+
+
+def get_gitcode_token(repo_key: str = "", user_id: int = 0) -> str:
+    """统一获取仓库 API Token（bot token）。
+
+    - repo_key 非空 → get_repo_bot_token(repo_key)：按真实平台解析，含跨平台候选与
+      Gitea/GitLab 实例级兜底
     - user_id > 0 → user token（user_accounts.gitcode_api_token）
     """
-    from src.repo_key import to_repo_key
-    repo_key = to_repo_key(repo_key)
     if repo_key:
-        # 1. devops_agent_session.repo_gitcode_token（agent 专属配置）
-        try:
-            with db_lock:
-                c = db.cursor()
-                c.execute("SELECT repo_gitcode_token FROM devops_agent_session WHERE repo_key=? AND repo_gitcode_token IS NOT NULL AND repo_gitcode_token!='' LIMIT 1", (repo_key,))
-                row = c.fetchone()
-                if row:
-                    return row[0]
-        except Exception as e:
-            log.warning(f"get_gitcode_token: query devops_agent_session failed: {e}")
-        # 2. managed_repos.bot_gitcode_token（仓库级配置）
-        if "/" in repo_key:
-            from src.repo_key import split_owner_repo
-            owner, repo = split_owner_repo(repo_key)
-            tok = get_bot_token_by_repo(owner, repo)
-            if tok:
-                return tok
-        # 3. 全局 bot token
-        return _get_global_bot_token()
+        return get_repo_bot_token(repo_key)
     if user_id > 0:
         return get_user_gitcode_token(user_id)
     return ""

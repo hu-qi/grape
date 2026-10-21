@@ -359,7 +359,7 @@ def get_or_create_agent_session(repo_key: str, agent_type: str,
 
 def upsert_agent_session(*, repo_key: str, agent_type: str,
                          runtime_id: int = 0, skill: str = "", skill_id: int = 0,
-                         repo_gitcode_token: str = "", status: str = "idle",
+                         repo_gitcode_token: str | None = None, status: str = "idle",
                          enable: int | None = None, subscribe_events: str | None = None,
                          im_app_id: str | None = None, im_app_secret: str | None = None,
                          im_provider: str | None = None) -> str:
@@ -370,8 +370,9 @@ def upsert_agent_session(*, repo_key: str, agent_type: str,
     导致 vod_conversations.agent_session_id 悬空（"agent_session_id not found, auto-rebind"）。
     修复：已存在 → UPDATE 保留 id；不存在 → INSERT。
 
-    enable/subscribe_events/im_* 传 None = 保留既有值（UPDATE 不改；INSERT 用默认）；
-    传具体值 = 覆盖（im 三字段仅显式传值才写，防 apply_scene/ensure_default 误清飞书绑定）。
+    enable/subscribe_events/im_*/repo_gitcode_token 传 None（或空串）= 保留既有值
+    （UPDATE 不改；INSERT 用默认）；传具体值 = 覆盖（im 三字段仅显式传值才写，
+    防 apply_scene/ensure_default 误清飞书绑定与 bot token）。
     返回会话 id。
     """
     with db_lock:
@@ -381,9 +382,16 @@ def upsert_agent_session(*, repo_key: str, agent_type: str,
             (repo_key, agent_type)).fetchone()
         if row:
             sid = row[0]
-            sets = ["runtime_id=?", "skill=?", "skill_id=?", "repo_gitcode_token=?",
+            sets = ["runtime_id=?", "skill=?", "skill_id=?",
                     "status=?", "last_active_at=datetime('now')"]
-            params = [runtime_id, skill, skill_id, repo_gitcode_token, status]
+            params = [runtime_id, skill, skill_id, status]
+            # token 语义与其他配置一致：None/"" = 保留既有值；传具体值 = 覆盖。
+            # 2026-10-21 修复：旧实现无条件写 repo_gitcode_token=?，任何不传 token 的调用方
+            #（scenes apply_scene / ensure_default_sessions 等）都会把人工配置的 token 抹成空，
+            # 导致后续派发被 dependency_check 拦下（repo_gitcode_token is empty）。
+            if repo_gitcode_token:
+                sets.append("repo_gitcode_token=?")
+                params.append(repo_gitcode_token)
             if enable is not None:
                 sets.append("enable=?")
                 params.append(enable)
@@ -404,7 +412,7 @@ def upsert_agent_session(*, repo_key: str, agent_type: str,
         _sub = subscribe_events if subscribe_events is not None else "[]"
         c.execute(
             "INSERT INTO devops_agent_session (id, repo_key, agent_type, runtime_id, skill, skill_id, repo_gitcode_token, status, enable, subscribe_events, im_app_id, im_app_secret, im_provider, last_active_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))",
-            (sid, repo_key, agent_type, runtime_id, skill, skill_id, repo_gitcode_token,
+            (sid, repo_key, agent_type, runtime_id, skill, skill_id, repo_gitcode_token or "",
              status, _enable, _sub, im_app_id or "", im_app_secret or "", im_provider or ""))
         db.commit()
         return sid

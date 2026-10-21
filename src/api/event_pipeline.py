@@ -231,15 +231,11 @@ def _create_direct_task(repo_key, seq, agent_type, backend, skill_name,
         issue_id = evt.get("issue_id", "") or evt.get("payload", {}).get("issue_number", "") or ""
     from src.repo_key import from_repo_key
 
-    # 获取 bot token（按 provider 分流：GitHub 仓库用 get_github_token）
+    # 获取 bot token（统一入口：按 repo_key 真实 provider 解析，含 Gitea/GitLab 实例级兜底）
     repo_gitcode_token = ""
     try:
-        if repo_key.startswith("github:"):
-            from src.user.db import get_github_token
-            repo_gitcode_token = get_github_token(repo_key=repo_key) or ""
-        else:
-            from src.user.db import get_gitcode_token
-            repo_gitcode_token = get_gitcode_token(repo_key=repo_key) or ""
+        from src.user.db import get_repo_bot_token
+        repo_gitcode_token = get_repo_bot_token(repo_key) or ""
     except Exception as e:
         log.warning(f"create_direct_task: get bot token failed: {e}")
 
@@ -325,15 +321,11 @@ def _create_failed_task(repo_key, seq, agent_type, backend, skill_name,
         "ACCOUNT": evt.get("actor") or evt.get("account") or "",
     }
 
-    # repo_gitcode_token（按 provider 分流）
+    # repo_gitcode_token（统一入口，按真实 provider 解析）
     repo_gitcode_token = ""
     try:
-        if repo_key.startswith("github:"):
-            from src.user.db import get_github_token
-            repo_gitcode_token = get_github_token(repo_key=repo_key) or ""
-        else:
-            from src.user.db import get_gitcode_token
-            repo_gitcode_token = get_gitcode_token(repo_key=repo_key) or ""
+        from src.user.db import get_repo_bot_token
+        repo_gitcode_token = get_repo_bot_token(repo_key) or ""
     except Exception:
         pass
 
@@ -1989,17 +1981,12 @@ def _is_github_repo(repo_key: str) -> bool:
 def _get_repo_api_token(repo_key: str) -> str:
     """根据 repo_key 的 provider 获取对应 VCS API token。
 
-    GitHub → get_github_token；GitCode → get_gitcode_token。
+    统一走 get_repo_bot_token：按真实 provider 解析（gitcode/github/gitea/gitlab），
+    含跨平台候选与实例级兜底——旧实现只有 GitHub/其它 两条分支，gitea/gitlab 恒空。
     """
-    if _is_github_repo(repo_key):
-        try:
-            from src.user.db import get_github_token
-            return get_github_token(repo_key=repo_key) or ""
-        except Exception:
-            return ""
     try:
-        from src.user.db import get_gitcode_token
-        return get_gitcode_token(repo_key=repo_key) or ""
+        from src.user.db import get_repo_bot_token
+        return get_repo_bot_token(repo_key) or ""
     except Exception:
         return ""
 
@@ -2037,8 +2024,7 @@ def _fetch_issue_assignee(repo_key: str, issue_id: str) -> str:
         owner, rname = split_owner_repo(repo_key)
 
         if _is_github_repo(repo_key):
-            from src.user.db import get_github_token
-            tok = get_github_token(repo_key=repo_key) or ""
+            tok = _get_repo_api_token(repo_key)
             if not tok:
                 return ""
             d = _github_fetch_issue(owner, rname, num, tok)
@@ -2047,8 +2033,7 @@ def _fetch_issue_assignee(repo_key: str, issue_id: str) -> str:
             return login or ""
         # GitCode 原逻辑
         import urllib.request
-        from src.user.db import get_gitcode_token
-        tok = get_gitcode_token(repo_key=repo_key) or ""
+        tok = _get_repo_api_token(repo_key)
         if not tok:
             return ""
         req = urllib.request.Request(
@@ -2083,16 +2068,14 @@ def _fetch_issue_title_via_api(repo_key: str, issue_id: str) -> str:
         owner, rname = split_owner_repo(repo_key)
 
         if _is_github_repo(repo_key):
-            from src.user.db import get_github_token
-            tok = get_github_token(repo_key=repo_key) or ""
+            tok = _get_repo_api_token(repo_key)
             if not tok:
                 return ""
             d = _github_fetch_issue(owner, rname, num, tok)
             return d.get("title", "") or ""
         # GitCode 原逻辑
         import urllib.request
-        from src.user.db import get_gitcode_token
-        tok = get_gitcode_token(repo_key=repo_key) or ""
+        tok = _get_repo_api_token(repo_key)
         if not tok:
             return ""
         req = urllib.request.Request(
@@ -2273,12 +2256,8 @@ def _enqueue_pipeline_task(repo_key, seq, agent_type, backend, skill_name, evt,
 
     repo_gitcode_token = ""
     try:
-        if repo_key.startswith("github:"):
-            from src.user.db import get_github_token
-            repo_gitcode_token = get_github_token(repo_key=repo_key) or ""
-        else:
-            from src.user.db import get_gitcode_token
-            repo_gitcode_token = get_gitcode_token(repo_key=repo_key) or ""
+        from src.user.db import get_repo_bot_token
+        repo_gitcode_token = get_repo_bot_token(repo_key) or ""
     except Exception:
         pass
 
@@ -2987,18 +2966,15 @@ def _execute_agent_inner(repo_key: str, seq: int, agent_type: str,
 
     log.info(f"Exec agent: [Agent:{agent_type}|repo:{repo_name}] type={agent_type}, backend={inst_name}, skill={skill_name}, oc_session={oc_session_id[:20] if oc_session_id else 'none'}")
 
-    # 获取 bot token（按 provider 分流：GitHub 仓库用 get_github_token，其他用 get_gitcode_token）
+    # 获取 bot token（统一入口：按 repo_key 真实 provider 解析，含 Gitea/GitLab 实例级兜底）
     repo_gitcode_token = ""
     try:
-        if repo_key.startswith("github:"):
-            from src.user.db import get_github_token
-            repo_gitcode_token = get_github_token(repo_key=repo_key) or ""
-        else:
-            from src.user.db import get_gitcode_token
-            repo_gitcode_token = get_gitcode_token(repo_key=repo_name) or ""
+        from src.user.db import get_repo_bot_token
+        repo_gitcode_token = get_repo_bot_token(repo_key) or ""
     except Exception as e:
         log.warning(f"Exec agent: get bot token failed: {e}")
-    log.info(f"Exec agent: bot_token={'set' if repo_gitcode_token else 'none'} (provider={'github' if repo_key.startswith('github:') else 'gitcode'})")
+    _prov = "github" if repo_key.startswith("github:") else repo_key.split(":", 1)[0] if ":" in repo_key else "gitcode"
+    log.info(f"Exec agent: bot_token={'set' if repo_gitcode_token else 'none'} (provider={_prov})")
 
     # Agent 显示名（注入 AGENT_NAME 环境变量，skill 中 [$AGENT_NAME] 使用）
     agent_name = get_agent_display_name(agent_type)

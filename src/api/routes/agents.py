@@ -216,7 +216,11 @@ def get_agent_detail(name: str, owner: str, repo: str, issue_number: str = "",
                     _sub_evts = json.loads(row[10] or "[]") if row[10] else []
                 except Exception:
                     _sub_evts = []
-                session_data = {"id": row[0], "runtime": backend_name, "skill": row[2] or "", "skill_id": row[3] or 0, "repo_gitcode_token": row[4] or "", "runtime_session_id": row[5], "status": row[6], "last_active_at": row[7],
+                session_data = {"id": row[0], "runtime": backend_name, "skill": row[2] or "", "skill_id": row[3] or 0,
+                               # 脱敏回显：只暴露"是否已配置"，不回传 token 明文
+                               "repo_gitcode_token": "********" if row[4] else "",
+                               "repo_gitcode_token_set": bool(row[4]),
+                               "runtime_session_id": row[5], "status": row[6], "last_active_at": row[7],
                                "im_app_id": row[8] or "",
                                "instance_name": instance_name_val,
                                "enable": bool(row[9]) if row[9] is not None else True,
@@ -360,6 +364,7 @@ def get_agent_detail(name: str, owner: str, repo: str, issue_number: str = "",
         "skill_id": session_data.get("skill_id", 0),
         "skill_scope": skill_scope,
         "repo_gitcode_token": session_data.get("repo_gitcode_token", ""),
+        "repo_gitcode_token_set": session_data.get("repo_gitcode_token_set", False),
         "subscribe_events": session_data.get("subscribe_events", []),
         "status": session_data.get("status", "idle"),
         "last_active": session_data.get("last_active_at", ""),
@@ -391,6 +396,9 @@ class AgentConfig(BaseModel):
     im_app_id: str = ""
     im_app_secret: str = ""
     im_unbind: bool = False  # Issue #294：显式解绑标记（防普通保存误清既有 IM 绑定）
+    # 仓库 bot token（可选）：空/掩码 = 不修改（保留既有或回落仓库级配置），
+    # 传具体值 = 覆盖 devops_agent_session.repo_gitcode_token（供无仓库级配置时手工指定）。
+    repo_gitcode_token: str = ""
 
 
 @router.post("/{name}/{owner}/{repo}/clean", operation_id="agents_clean", summary="Clean agent session", description="Cleans an agent session by clearing runtime_session_id; a new session is created on the next event.")
@@ -431,8 +439,13 @@ async def update_agent_config(name: str, owner: str, repo: str, body: AgentConfi
     check_repo_access(user, repo_key)
 
     app_secret = ""
+    # 仓库 bot token 优先级：显式传入（非空且非掩码）→ 仓库级配置（跨平台候选）→ None（保留既有）
     from src.user.db import get_bot_token_by_repo
-    repo_token = get_bot_token_by_repo(owner, repo)
+    _body_tok = (body.repo_gitcode_token or "").strip()
+    if _body_tok and set(_body_tok) != {"*"}:
+        repo_token = _body_tok
+    else:
+        repo_token = get_bot_token_by_repo(owner, repo) or None
 
     from src.session_manager import db, db_lock
 
