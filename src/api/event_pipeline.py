@@ -2262,8 +2262,17 @@ def _enqueue_pipeline_task(repo_key, seq, agent_type, backend, skill_name, evt,
         pass
     if not repo_gitcode_token:
         _prov_warn = repo_key.split(":", 1)[0] if ":" in (repo_key or "") else "gitcode"
+        _layers = ""
+        try:
+            from src.user.db import repo_token_layer_status
+            _st = repo_token_layer_status(repo_key)
+            _layers = (f" [agent_session={'set' if _st['agent_session'] else 'empty'}"
+                       f", managed_repos={'set' if _st['managed_repos'] else 'empty'}"
+                       f", global/instance={'set' if _st['global'] else 'empty'}]")
+        except Exception:
+            pass
         log.warning(
-            f"Pipeline enqueue: repo bot token EMPTY for repo={repo_key} provider={_prov_warn} — "
+            f"Pipeline enqueue: repo bot token EMPTY for repo={repo_key} provider={_prov_warn}{_layers} — "
             f"任务会因 dependency_check 失败；需在以下任一处置 token：Gitea/GitLab 实例配置、"
             f"仓库 bot token、Agent 的 repo_gitcode_token")
 

@@ -1530,9 +1530,10 @@ def _get_global_bot_token() -> str:
     return _load_global_bot_config().get("gitcode_api_token", "") or ""
 
 
-def get_repo_bot_token(repo_key: str) -> str:
-    """仓库 bot token 单一入口：按 repo_key 的真实 provider 解析（跨平台候选 + 实例级兜底）。
+def resolve_repo_bot_token(repo_key: str) -> tuple[str, str]:
+    """解析仓库 bot token，返回 (token, 来源)。
 
+    来源：agent_session / managed_repos / global（全局或实例级）/ ""（三层均无值）。
     解析顺序（与旧 get_gitcode_token 一致，但平台感知）：
       1. devops_agent_session.repo_gitcode_token（Agent 配置，跨平台候选）
       2. managed_repos.bot_gitcode_token / bot_github_token（仓库配置，跨平台候选）
@@ -1544,7 +1545,7 @@ def get_repo_bot_token(repo_key: str) -> str:
     """
     from src.repo_key import parse_repo_key, cross_provider_keys
     if not repo_key:
-        return ""
+        return "", ""
     provider, owner, name = parse_repo_key(repo_key)
     base = f"{owner}/{name}" if owner and name else repo_key
     keys = cross_provider_keys(base)
@@ -1564,15 +1565,38 @@ def get_repo_bot_token(repo_key: str) -> str:
             _rows = {r[0]: r[1] for r in c.fetchall()}
         for _k in keys:
             if _rows.get(_k):
-                return _rows[_k]
+                return _rows[_k], "agent_session"
     except Exception as e:
         log.warning(f"get_repo_bot_token: query devops_agent_session failed: {e}")
     # 2. managed_repos（仓库级配置）
     tok = get_bot_token_by_repo(owner, name, provider=provider)
     if tok:
-        return tok
+        return tok, "managed_repos"
     # 3. 全局/实例级兜底
-    return get_global_token_for_provider(provider or "gitcode")
+    gtok = get_global_token_for_provider(provider or "gitcode")
+    if gtok:
+        return gtok, "global"
+    return "", ""
+
+
+def repo_token_layer_status(repo_key: str) -> dict:
+    """三层 token 是否取到值（只回 bool，不回明文），用于排障日志。"""
+    from src.repo_key import parse_repo_key
+    _prov, _owner, _name = parse_repo_key(repo_key or "")
+    _tok, _src = resolve_repo_bot_token(repo_key)
+    return {
+        "agent_session": _src == "agent_session",
+        "managed_repos": _src == "managed_repos",
+        "global": _src == "global",
+        "source": _src,
+        "provider": _prov or "",
+        "resolved": bool(_tok),
+    }
+
+
+def get_repo_bot_token(repo_key: str) -> str:
+    """仓库 bot token 单一入口：按 repo_key 的真实 provider 解析（跨平台候选 + 实例级兜底）。"""
+    return resolve_repo_bot_token(repo_key)[0]
 
 
 def get_gitcode_token(repo_key: str = "", user_id: int = 0) -> str:
