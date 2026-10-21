@@ -7,11 +7,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ curl git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# opencode CLI（本机直连引擎探测需要：find_cli → probe --version）
-# 官方安装脚本将二进制放到 /root/.opencode/bin/opencode（os_adapter.find_cli 的 Unix 回退路径覆盖）。
-# 容错：内网构建环境若不可达 opencode.ai 则跳过（不阻断流水线），运行期引擎仍可经 PATH/回退路径探测。
-RUN (curl -fsSL https://opencode.ai/install | bash) || echo "[docker] opencode install skipped (network unreachable)"
-ENV PATH="/root/.opencode/bin:${PATH}"
+# 本机直连引擎需要真实 CLI。集群无法稳定访问 GitHub，优先从内网 Gitea 包仓库下载；
+# 官方 release 作为外部构建的回退。校验固定版本的摘要，安装失败时让镜像构建失败。
+ARG OPENCODE_VERSION=1.19.3
+RUN set -eux; \
+    case "$(uname -m)" in \
+      aarch64|arm64) asset=opencode-linux-arm64.tar.gz; sha=7900818a6a98881edbbadab4b7525940eff3b9750040c200481f9f56cacee405 ;; \
+      x86_64|amd64) asset=opencode-linux-x64.tar.gz; sha=13a8fb2978302071b86f9d7e00da9c8895f9cd846978379c3bdc6a5333536c9b ;; \
+      *) echo "Unsupported OpenCode architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    mirror="http://172.16.145.202:30344/api/packages/dev/generic/opencode-cli/${OPENCODE_VERSION}/${asset}"; \
+    upstream="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/${asset}"; \
+    curl -fL --retry 2 --connect-timeout 10 --max-time 180 "$mirror" -o /tmp/opencode.tar.gz || \
+      curl -fL --retry 2 --connect-timeout 10 --max-time 180 "$upstream" -o /tmp/opencode.tar.gz; \
+    echo "$sha  /tmp/opencode.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/opencode.tar.gz -C /usr/local/bin opencode; \
+    rm /tmp/opencode.tar.gz; \
+    opencode --version
 
 # Python 依赖
 COPY requirements.txt .
