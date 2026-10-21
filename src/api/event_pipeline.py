@@ -2260,6 +2260,12 @@ def _enqueue_pipeline_task(repo_key, seq, agent_type, backend, skill_name, evt,
         repo_gitcode_token = get_repo_bot_token(repo_key) or ""
     except Exception:
         pass
+    if not repo_gitcode_token:
+        _prov_warn = repo_key.split(":", 1)[0] if ":" in (repo_key or "") else "gitcode"
+        log.warning(
+            f"Pipeline enqueue: repo bot token EMPTY for repo={repo_key} provider={_prov_warn} — "
+            f"任务会因 dependency_check 失败；需在以下任一处置 token：Gitea/GitLab 实例配置、"
+            f"仓库 bot token、Agent 的 repo_gitcode_token")
 
     # 4) 构建 prompt（含技能占位符化，见 skill-delivery-remote.md）
     try:

@@ -56,11 +56,19 @@ def validate_task_dependencies(task: dict, engine_name: str = "") -> None:
         pass
 
     # 4. Repo token for git agents (coding/qa/sre need git access)
+    # 注：repo_gitcode_token 是历史命名，语义为「仓库 bot token（任意平台）」。
+    # 对 Gitea/GitLab 部署，这一列装的就是对应平台的 token；解析链路见
+    # src/user/db.py get_repo_bot_token（agent session → 仓库配置 → 全局/实例级）。
     _GIT_AGENTS = ("vod", "issue", "coding", "qa", "sre")
     if agent_type in _GIT_AGENTS:
         token = task.get("repo_gitcode_token") or ""
         if not token:
-            missing.append(f"repo_gitcode_token is empty for git agent {agent_type} (task={tid})")
+            _rk = task.get("repo_key") or ""
+            _prov = _rk.split(":", 1)[0] if ":" in _rk else "gitcode"
+            missing.append(
+                f"repo_gitcode_token is empty for git agent {agent_type} "
+                f"(task={tid}, repo={_rk or '-'}, provider={_prov})"
+            )
 
     # 5. Issue session for git worktree agents (warning, not hard fail)
     issue_session_id = task.get("issue_session_id") or ""

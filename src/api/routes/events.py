@@ -496,6 +496,15 @@ def redispatch_event(seq: int, local_only: bool = False, user: dict = Depends(re
                             runtime_id=_orig_rid,
                             account=old.get("account") or "",
                             issue_number=old.get("issue_id") or "")
+        # token 优先沿用旧值；旧值为空时必须重新解析，否则重试会把空值一直传下去，
+        # 导致新任务仍被 dependency_check 拦下（"repo_gitcode_token is empty"）。
+        _tk = old.get("repo_gitcode_token") or ""
+        if not _tk:
+            try:
+                from src.user.db import get_repo_bot_token
+                _tk = get_repo_bot_token(old.get("repo_key") or "") or ""
+            except Exception:
+                _tk = ""
         _new_task_id = enqueue_task(
             agent_session_id=old.get("agent_session_id") or "",
             runtime_id=_orig_rid,
@@ -511,7 +520,7 @@ def redispatch_event(seq: int, local_only: bool = False, user: dict = Depends(re
             event_type=old.get("event_type") or "",
             account=old.get("account") or "",
             user_id=old.get("user_id") or 0,
-            repo_gitcode_token=old.get("repo_gitcode_token") or "",
+            repo_gitcode_token=_tk,
             env_extra=_rebuild_env,
             server_url=old.get("server_url") or "",
             issue_session_id=_sid,
@@ -862,6 +871,14 @@ def redispatch_event(seq: int, local_only: bool = False, user: dict = Depends(re
                                     runtime_id=_rid,
                                     account=old.get("account") or "",
                                     issue_number=old.get("issue_id") or "")
+                # token 优先沿用旧值；旧值为空时重新解析（否则重试会把空值一直传下去）
+                _tk2 = old.get("repo_gitcode_token") or ""
+                if not _tk2:
+                    try:
+                        from src.user.db import get_repo_bot_token
+                        _tk2 = get_repo_bot_token(old.get("repo_key") or "") or ""
+                    except Exception:
+                        _tk2 = ""
                 _new_task_id = enqueue_task(
                     agent_session_id=old.get("agent_session_id") or "",
                     runtime_id=_rid,
@@ -877,7 +894,7 @@ def redispatch_event(seq: int, local_only: bool = False, user: dict = Depends(re
                     event_type=old.get("event_type") or "",
                     account=old.get("account") or "",
                     user_id=old.get("user_id") or 0,
-                    repo_gitcode_token=old.get("repo_gitcode_token") or "",
+                    repo_gitcode_token=_tk2,
                     env_extra=_rebuild_env,
                     server_url=old.get("server_url") or "",
                     issue_session_id=_sid,
