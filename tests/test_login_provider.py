@@ -119,7 +119,7 @@ class TestGetUserProviderAndToken:
         """未知 login_provider 值 → fallback 到现有逻辑"""
         with patch("src.api.routes.repos.get_user_github_token", return_value="gh_tok"), \
              patch("src.api.routes.repos.get_user_token", return_value="gc_tok"):
-            provider, token = _get_user_provider_and_token("ivan", login_provider="gitlab")
+            provider, token = _get_user_provider_and_token("ivan", login_provider="unknown")
         assert provider == "github"
         assert token == "gh_tok"
 

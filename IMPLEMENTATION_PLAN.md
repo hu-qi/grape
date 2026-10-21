@@ -117,3 +117,29 @@
 
 
 
+
+## Stage 14: Private instance credential isolation
+**Goal**: Prevent explicit GitLab/Gitea sessions from selecting another instance or platform credential.
+**Success Criteria**: Missing instance credentials fail closed; disabled instances never supply fallback tokens; legacy same-instance credentials remain compatible.
+**Tests**: Parameterized credential and provider resolution regressions, existing provider login/repository suites.
+**Status**: Complete
+
+## Stage 15: Private provider API failure handling
+**Goal**: Report invalid upstream responses without silently clearing repository caches.
+**Success Criteria**: Non-JSON and unexpected repository payloads raise descriptive errors.
+**Tests**: HTML proxy response, malformed successful JSON, valid empty repository lists.
+**Status**: Complete
+
+## Stage 16: Independent verification and existing deployment
+**Goal**: Run AtomCode/OpenCode verification, deploy to gpditest/aidev/grape and verify both private providers.
+**Success Criteria**: Local regression evidence, reviewed patch, current deployment rollout and live login/repository evidence.
+**Tests**: Focused tests and compile checks; current live login/repository smoke checks.
+**Status**: In Progress
+
+## Stage 17: Persistent MySQL and application configuration
+**Goal**: Run a separate MySQL service in aidev, migrate the live SQLite data, and persist grape configuration across Pod replacement.
+**Success Criteria**: Verified off-Pod backup; MySQL data volume and service healthy; row-count-verified migration; grape uses MySQL and persistent configuration after a restart.
+**Tests**: SQLite integrity and row counts, MySQL health and migrated row counts, live application restart and private-provider smoke checks.
+**Status**: Complete
+
+2026-10-21 acceptance: the existing `aidev/grape` Deployment runs image `harbor.gpdi.com/dev/grape-candidate:20261021090928` with MySQL and a persistent `/app/configs` volume. A quiesced SQLite backup passed integrity checks; 61 source tables were copied with row-count checks into the dedicated MySQL PVC. After the image rollout replaced the Pod, `/readyz` reported healthy database, tables, and templates. GitLab and private Gitea token login returned HTTP 200, and their member-repository endpoints returned 3 and 8 repositories respectively. The 157 focused tests and syntax checks passed. Independent CLI review did not complete: AtomCode lacked a configured base URL and OpenCode exceeded a 90-second cap. Full-suite results are tracked separately from the focused release gate.

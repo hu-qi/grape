@@ -12,4 +12,13 @@ docs/
 skills/tools/
 skills/huawei-cloud-ecs-servers/
 branches-backup-*.bundle
-configs/
+configs/*
+!configs/agent-description.json
+!configs/agent-skill-mapping.json
+!configs/credential-filter.json
+!configs/default-scene.json
+!configs/engine-selection.json
+!configs/global-bot-token.seed.json
+!configs/onboarding-templates.json
+!configs/pipelines.json
+!configs/project-templates.json

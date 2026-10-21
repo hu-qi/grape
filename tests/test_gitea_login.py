@@ -1,4 +1,5 @@
 """Gitea OAuth: configured instances, browser-bound state and isolated identities."""
+import json
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import Mock, patch
 
@@ -62,6 +63,17 @@ def test_single_and_multi_selection(configured):
     assert configured.get('/api/auth/login/gitea?instance=cloud_gitea').status_code == 400
     config_store.save_config({'gitea_mode': 'multi'})
     assert len(configured.get('/api/auth/gitea/instances').json()['instances']) == 2
+
+
+def test_seed_token_mode_enables_login_without_legacy_flag(configured):
+    from src.user.gitea_config import get_login_instance
+    seed = {'gitea_mode': 'single', 'gitea_default_instance': 'private_gitea',
+            'gitea_instances': [{'id': 'private_gitea', 'name': 'Private',
+                                 'base_url': 'https://gitea.example.test', 'auth_mode': 'token'}]}
+    with open(config_store._GBT_PATH, 'w', encoding='utf-8') as stream:
+        json.dump(seed, stream)
+    assert get_login_instance('private_gitea')['allow_token_login'] is True
+    assert configured.get('/api/auth/gitea/instances').json()['instances'][0]['allow_token_login'] is True
 
 
 def test_authorize_uses_instance_and_pkce(configured):

@@ -82,6 +82,10 @@ _PRAGMA_TABLE_INFO_RE = re.compile(r"^\s*PRAGMA\s+table_info\(\s*([`\"']?)(\w+)\
 _SQLITE_MASTER_NAME_RE = re.compile(
     r"^\s*SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s*$", re.I
 )
+_SQLITE_MASTER_FILTERED_NAME_RE = re.compile(
+    r"^\s*SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s+"
+    r"AND\s+name\s*=\s*(?:'(?P<single>\w+)'|\"(?P<double>\w+)\"|(?P<param>\?))\s*$", re.I
+)
 _SQLITE_MASTER_SQL_RE = re.compile(
     r"^\s*SELECT\s+sql\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s+AND\s+name\s*=\s*['\"]([\w]+)['\"]\s*$",
     re.I,
@@ -96,8 +100,8 @@ _PRAGMA_IGNORE_RE = re.compile(
     r"^\s*PRAGMA\s+(journal_mode|busy_timeout|synchronous|foreign_keys|locking_mode|cache_size|wal_autocheckpoint|temp_store)",
     re.I,
 )
-_PRAGMA_INDEX_LIST_RE = re.compile(r"^\s*PRAGMA\s+index_list\(\s*([`\"\w]+)\s*\)\s*$", re.I)
-_PRAGMA_INDEX_INFO_RE = re.compile(r"^\s*PRAGMA\s+index_info\(\s*([`\"\w]+)\s*\)\s*$", re.I)
+_PRAGMA_INDEX_LIST_RE = re.compile(r"^\s*PRAGMA\s+index_list\(\s*([`\"']?)(\w+)\1\s*\)\s*$", re.I)
+_PRAGMA_INDEX_INFO_RE = re.compile(r"^\s*PRAGMA\s+index_info\(\s*([`\"']?)(\w+)\1\s*\)\s*$", re.I)
 # 仅处理 'gitcode:' || col 拼接模式（代码中唯一用法）
 _CONCAT_RE = re.compile(r"'gitcode:'\s*\|\|\s*([A-Za-z_][A-Za-z0-9_.]*)")
 
@@ -246,6 +250,8 @@ def translate_sql(sql: str) -> str:
     # sqlite_master 表名列举 → SHOW TABLES
     if _SQLITE_MASTER_NAME_RE.match(sql):
         return "SHOW TABLES"
+    if _SQLITE_MASTER_FILTERED_NAME_RE.match(sql):
+        return sql  # Cursor executes an exact metadata lookup.
     # sqlite_master 取建表 SQL → SHOW CREATE TABLE（结果重排由 Cursor 特判）
     if _SQLITE_MASTER_SQL_RE.match(sql):
         return sql  # 标记：Cursor.execute 特判
@@ -392,6 +398,25 @@ class MySQLCompatCursor:
     def execute(self, sql: str, params=None):
         if params is not None and not isinstance(params, (tuple, list, dict)):
             params = (params,)
+        m = _SQLITE_MASTER_FILTERED_NAME_RE.match(sql)
+        if m:
+            table = m.group("single") or m.group("double")
+            if m.group("param"):
+                if not isinstance(params, (tuple, list)) or len(params) != 1:
+                    raise ValueError("sqlite_master name lookup requires one table name")
+                table = params[0]
+            cur = self._conn._raw_cursor()
+            cur.execute(
+                "SELECT TABLE_NAME FROM information_schema.tables "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' AND TABLE_NAME=%s",
+                (table,),
+            )
+            self._rows = list(cur.fetchall())
+            self._idx = 0
+            self.description = [("name",)]
+            self.rowcount = len(self._rows)
+            self._pycur = None
+            return self
         # PRAGMA table_info(X)
         m = _PRAGMA_TABLE_INFO_RE.match(sql)
         if m:
@@ -413,7 +438,7 @@ class MySQLCompatCursor:
         # PRAGMA index_list(X) → (seq, name, unique) 兼容 sqlite 结构
         m = _PRAGMA_INDEX_LIST_RE.match(sql)
         if m:
-            tbl = m.group(1)
+            tbl = m.group(2)
             q = (
                 "SELECT 0, INDEX_NAME, IF(NON_UNIQUE=0,1,0) "
                 "FROM information_schema.statistics WHERE TABLE_SCHEMA=DATABASE() "
@@ -430,7 +455,7 @@ class MySQLCompatCursor:
         # PRAGMA index_info(X) → (seqno, cid, name) 兼容 sqlite 结构
         m = _PRAGMA_INDEX_INFO_RE.match(sql)
         if m:
-            idx = m.group(1)
+            idx = m.group(2)
             q = (
                 "SELECT SEQ_IN_INDEX-1, 0, COLUMN_NAME FROM information_schema.statistics "
                 "WHERE TABLE_SCHEMA=DATABASE() AND INDEX_NAME=%s ORDER BY SEQ_IN_INDEX"
@@ -538,6 +563,10 @@ class MySQLCompatCursor:
         row = self._rows[self._idx]
         self._idx += 1
         return row
+
+    def __iter__(self):
+        while (row := self.fetchone()) is not None:
+            yield row
 
     def fetchall(self):
         # sqlite3 返回 list（代码依赖 list 方法如 .reverse()），pymysql 返回 tuple → 统一转 list

@@ -3579,6 +3579,7 @@ def _migrate_tables():
     try:
         import sys as _sys
         _is_test = any("pytest" in _mod for _mod in (_sys.modules.keys() if _sys.modules else []))
+        _is_dropped = False
         if _is_test:
             log.info("Phase C5: skip drop issue_state in test mode")
         else:
@@ -3610,8 +3611,6 @@ def _migrate_tables():
                         else:
                             _is_dropped = False
                             log.warning(f"Phase C5: skip drop issue_state (orphan={_orphan}, mismatch={_mismatch})")
-                if _is_dropped:
-                    log.info("Phase C5: issue_state dropped（字段已收编进 issue 单表）")
             if _is_dropped:
                 log.info("Phase C5: issue_state dropped（字段已收编进 issue 单表）")
     except Exception as e:

@@ -34,7 +34,7 @@ def _get_user_provider_and_token(username: str, login_provider: str = "", login_
     """根据用户已绑定的令牌自动选择 provider，返回 (provider, token)。
 
     login_provider：登录来源平台（gitcode/github/gitea/gitlab），优先返回对应平台 token；
-    缺失或对应平台无 token 时 fallback 到现有优先级逻辑。
+    显式私有实例不跨平台或实例回退；缺少凭据时返回空 token。
     """
     if login_provider == "gitcode":
         gitcode_token = get_user_token(username)
@@ -54,8 +54,10 @@ def _get_user_provider_and_token(username: str, login_provider: str = "", login_
         cfg = load_config()
         inst_key = login_instance or cfg.get('gitea_default_instance', '')
         for inst in cfg.get('gitea_instances', []):
-            if inst.get('id') == inst_key and inst.get('token'):
+            if (inst.get('id') == inst_key and inst.get('enabled', True)
+                    and inst.get('auth_mode') != 'none' and inst.get('token')):
                 return "gitea", inst['token']
+        return "gitea", ""
     elif login_provider == "gitlab":
         from src.api.deps import get_user_gitlab_token
         gitlab_token = get_user_gitlab_token(username, instance_id=login_instance)
@@ -66,8 +68,10 @@ def _get_user_provider_and_token(username: str, login_provider: str = "", login_
         cfg = load_config()
         inst_key = login_instance or cfg.get('gitlab_default_instance', '')
         for inst in cfg.get('gitlab_instances', []):
-            if inst.get('id') == inst_key and inst.get('token'):
+            if (inst.get('id') == inst_key and inst.get('enabled', True)
+                    and inst.get('auth_mode') != 'none' and inst.get('token')):
                 return "gitlab", inst['token']
+        return "gitlab", ""
 
     # 兜底优先级：github -> gitea -> gitlab -> gitcode
     github_token = get_user_github_token(username)
@@ -81,20 +85,26 @@ def _get_user_provider_and_token(username: str, login_provider: str = "", login_
     if gitlab_token:
         return "gitlab", gitlab_token
 
-    # 再次检查 Admin 配置的默认实例 Token 兜底
-    from src.admin.config_store import load_config
-    cfg = load_config()
-    for inst in cfg.get('gitea_instances', []):
-        if inst.get('token') and inst.get('auth_mode') != 'none':
-            return "gitea", inst['token']
-    for inst in cfg.get('gitlab_instances', []):
-        if inst.get('token') and inst.get('auth_mode') != 'none':
-            return "gitlab", inst['token']
-
     gitcode_token = get_user_token(username)
     if gitcode_token:
         return "gitcode", gitcode_token
     return "", ""
+
+
+def _private_instance_base(provider: str, instance_id: str = "", credential: dict | None = None) -> str:
+    """Resolve an endpoint without sending a selected instance's token to a default host."""
+    base = (credential or {}).get("base_url", "")
+    if not base:
+        from src.admin.config_store import load_config
+        cfg = load_config()
+        selected = instance_id or cfg.get(f"{provider}_default_instance", "")
+        for instance in cfg.get(f"{provider}_instances", []):
+            if instance.get("id") == selected:
+                base = instance.get("base_url", "")
+                break
+    if not base:
+        raise RuntimeError(f"{provider} 实例地址未配置，请检查所选实例")
+    return base.rstrip("/")
 
 
 def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode", username: str = "", login_instance: str = "") -> list[dict]:
@@ -110,15 +120,7 @@ def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode", us
         from src.user.repo_manager import fetch_gitea_repos_with_role
         from src.api.deps import get_user_gitea_credential
         cred = get_user_gitea_credential(user_id or username, instance_id=login_instance)
-        base_url = cred.get("base_url", "") if cred else ""
-        if not base_url:
-            from src.admin.config_store import load_config
-            cfg = load_config()
-            inst_key = login_instance or cfg.get('gitea_default_instance', '')
-            for inst in cfg.get('gitea_instances', []):
-                if inst.get('id') == inst_key:
-                    base_url = inst.get('base_url', '')
-                    break
+        base_url = _private_instance_base("gitea", login_instance, cred)
         repos = fetch_gitea_repos_with_role(api_token, base_url=base_url)
         for r in repos:
             if not r.get("repo_key"):
@@ -127,15 +129,7 @@ def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode", us
         from src.user.repo_manager import fetch_gitlab_repos_with_role
         from src.api.deps import get_user_gitlab_credential
         cred = get_user_gitlab_credential(user_id or username, instance_id=login_instance)
-        base_url = cred.get("base_url", "") if cred else ""
-        if not base_url:
-            from src.admin.config_store import load_config
-            cfg = load_config()
-            inst_key = login_instance or cfg.get('gitlab_default_instance', '')
-            for inst in cfg.get('gitlab_instances', []):
-                if inst.get('id') == inst_key:
-                    base_url = inst.get('base_url', '')
-                    break
+        base_url = _private_instance_base("gitlab", login_instance, cred)
         repos = fetch_gitlab_repos_with_role(api_token, base_url=base_url)
         for r in repos:
             if not r.get("repo_key"):
@@ -464,11 +458,11 @@ def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
             raise HTTPException(status_code=502, detail={"code": 502, "message": f"检查失败: {e}"})
 
     elif provider == "gitea":
-        from src.user.repo_manager import _gitea_req, _get_default_gitea_base_url
+        from src.user.repo_manager import _gitea_req
         from src.api.deps import get_user_gitea_credential
         try:
             cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-            base = (cred.get("base_url") if cred else _get_default_gitea_base_url()).rstrip("/")
+            base = _private_instance_base("gitea", login_inst, cred)
             u_data = _gitea_req("GET", f"{base}/api/v1/user", api_token)
             login = u_data.get("username") or u_data.get("login") or (cred.get("username") if cred else "")
             if not login:
@@ -485,12 +479,12 @@ def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
             raise HTTPException(status_code=502, detail={"code": 502, "message": f"检查失败: {e}"})
 
     elif provider == "gitlab":
-        from src.user.repo_manager import _gitlab_req, _get_default_gitlab_base_url
+        from src.user.repo_manager import _gitlab_req
         from src.api.deps import get_user_gitlab_credential
         import urllib.parse
         try:
             cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-            base = (cred.get("base_url") if cred else _get_default_gitlab_base_url()).rstrip("/")
+            base = _private_instance_base("gitlab", login_inst, cred)
             u_data = _gitlab_req("GET", f"{base}/api/v4/user", api_token)
             login = u_data.get("username") or (cred.get("username") if cred else "")
             if not login:
@@ -556,7 +550,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
         from src.user.repo_manager import create_gitea_repo as _create_gitea_repo
         from src.api.deps import get_user_gitea_credential
         cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-        base = cred.get("base_url") if cred else ""
+        base = _private_instance_base("gitea", login_inst, cred)
         try:
             repo_info = _create_gitea_repo(api_token=api_token, name=name, description=body.description, private=private, base_url=base)
         except Exception as e:
@@ -565,7 +559,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
         from src.user.repo_manager import create_gitlab_repo as _create_gitlab_repo
         from src.api.deps import get_user_gitlab_credential
         cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-        base = cred.get("base_url") if cred else ""
+        base = _private_instance_base("gitlab", login_inst, cred)
         try:
             repo_info = _create_gitlab_repo(api_token=api_token, name=name, description=body.description, private=private, base_url=base)
         except Exception as e:
@@ -615,7 +609,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
                 from src.user.repo_manager import setup_gitea_webhook
                 from src.api.deps import get_user_gitea_credential
                 cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-                base = cred.get("base_url") if cred else ""
+                base = _private_instance_base("gitea", login_inst, cred)
                 repo_key = to_repo_key(full_name, provider="gitea")
                 hook_id = setup_gitea_webhook(api_token, owner, repo_name, webhook_url, base_url=base)
                 user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id)
@@ -624,7 +618,7 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
                 from src.user.repo_manager import setup_gitlab_webhook
                 from src.api.deps import get_user_gitlab_credential
                 cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-                base = cred.get("base_url") if cred else ""
+                base = _private_instance_base("gitlab", login_inst, cred)
                 repo_key = to_repo_key(full_name, provider="gitlab")
                 hook_id = setup_gitlab_webhook(api_token, full_name, webhook_url, base_url=base)
                 user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id)
@@ -757,7 +751,7 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
         from src.api.session_store import ensure_default_agent_sessions
         repo_key = to_repo_key(body.full_name, provider="gitea")
         cred = get_user_gitea_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-        base = cred.get("base_url") if cred else ""
+        base = _private_instance_base("gitea", login_inst, cred)
         try:
             hook_id = setup_gitea_webhook(api_token, owner, repo_name, webhook_url, base_url=base)
             from src.api.onboarding import cleanup_stale_repo_data
@@ -778,7 +772,7 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
         from src.api.session_store import ensure_default_agent_sessions
         repo_key = to_repo_key(body.full_name, provider="gitlab")
         cred = get_user_gitlab_credential(user.get("id") or user.get("username"), instance_id=login_inst)
-        base = cred.get("base_url") if cred else ""
+        base = _private_instance_base("gitlab", login_inst, cred)
         try:
             hook_id = setup_gitlab_webhook(api_token, body.full_name, webhook_url, base_url=base)
             from src.api.onboarding import cleanup_stale_repo_data

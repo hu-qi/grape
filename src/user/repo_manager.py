@@ -942,8 +942,8 @@ def _gitea_req(method: str, url: str, api_token: str, body: dict = None) -> dict
         raise RuntimeError(f"Gitea API {method} {url} error ({resp.status_code}): {err_msg}")
     try:
         return resp.json()
-    except Exception:
-        return {}
+    except ValueError as exc:
+        raise RuntimeError("VCS API 返回无效 JSON，请检查实例地址、代理或登录重定向") from exc
 
 
 def fetch_gitea_repos_with_role(api_token: str, base_url: str = "") -> list[dict]:
@@ -958,7 +958,9 @@ def fetch_gitea_repos_with_role(api_token: str, base_url: str = "") -> list[dict
     while True:
         url = f"{base}/api/v1/user/repos?limit=50&page={page}"
         data = _gitea_req("GET", url, api_token)
-        items = data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            raise RuntimeError("VCS 仓库 API 未返回列表，请检查实例地址和访问权限")
+        items = data
         if not items:
             break
         for r in items:
@@ -1073,8 +1075,8 @@ def _gitlab_req(method: str, url: str, api_token: str, body: dict = None) -> dic
         raise RuntimeError(f"GitLab API {method} {url} error ({resp.status_code}): {err_msg}")
     try:
         return resp.json()
-    except Exception:
-        return {}
+    except ValueError as exc:
+        raise RuntimeError("VCS API 返回无效 JSON，请检查实例地址、代理或登录重定向") from exc
 
 
 def fetch_gitlab_repos_with_role(api_token: str, base_url: str = "") -> list[dict]:
@@ -1091,7 +1093,9 @@ def fetch_gitlab_repos_with_role(api_token: str, base_url: str = "") -> list[dic
     while True:
         url = f"{base}/api/v4/projects?membership=true&per_page=100&page={page}&order_by=name"
         data = _gitlab_req("GET", url, api_token)
-        items = data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            raise RuntimeError("VCS 仓库 API 未返回列表，请检查实例地址和访问权限")
+        items = data
         if not items:
             break
         for p in items:

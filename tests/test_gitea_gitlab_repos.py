@@ -1,4 +1,5 @@
 import pytest
+from uuid import uuid4
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from src.api.main import app
@@ -11,7 +12,7 @@ client = TestClient(app)
 
 
 def test_get_user_provider_and_token_gitea():
-    username = "test_gitea_user"
+    username = f"test_gitea_user_{uuid4().hex}"
     user = user_db.create_user(username, "hash")
     uid = user["id"]
     cred_data = {
@@ -19,18 +20,18 @@ def test_get_user_provider_and_token_gitea():
         "gitea_user_id": "123",
         "username": username,
         "instance": "private_gitea",
-        "token": "88a5b674e52108f861ebb35ea1312ea020c2c1af",
+        "token": "test-gitea-token",
     }
     user_db.set_credential(uid, "gitea_login", cred_data)
     user_db.set_credential(uid, "gitea_login_private_gitea", cred_data)
 
     provider, token = _get_user_provider_and_token(username, "gitea", "private_gitea")
     assert provider == "gitea"
-    assert token == "88a5b674e52108f861ebb35ea1312ea020c2c1af"
+    assert token == "test-gitea-token"
 
 
 def test_get_user_provider_and_token_gitlab():
-    username = "test_gitlab_user"
+    username = f"test_gitlab_user_{uuid4().hex}"
     user = user_db.create_user(username, "hash")
     uid = user["id"]
     cred_data = {
@@ -38,14 +39,14 @@ def test_get_user_provider_and_token_gitlab():
         "gitlab_user_id": "9527",
         "username": username,
         "instance": "internal_gitlab",
-        "token": "rzdwQymCGB9nDsgEcyyo",
+        "token": "test-gitlab-token",
     }
     user_db.set_credential(uid, "gitlab_login", cred_data)
     user_db.set_credential(uid, "gitlab_login_internal_gitlab", cred_data)
 
     provider, token = _get_user_provider_and_token(username, "gitlab", "internal_gitlab")
     assert provider == "gitlab"
-    assert token == "rzdwQymCGB9nDsgEcyyo"
+    assert token == "test-gitlab-token"
 
 
 def test_fetch_gitea_repos_with_role_mock():

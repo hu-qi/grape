@@ -1602,7 +1602,7 @@ def get_user_gitlab_credential(user_id_or_username, instance_id: str = "") -> di
     if cred and cred.get("token"):
         if not instance_id or cred.get("instance") == instance_id:
             return cred
-    return cred if cred and cred.get("token") else None
+    return None
 
 
 def get_user_gitlab_token(user_id_or_username, instance_id: str = "") -> str:
@@ -1627,7 +1627,7 @@ def get_user_gitea_credential(user_id_or_username, instance_id: str = "") -> dic
     if cred and cred.get("token"):
         if not instance_id or cred.get("instance") == instance_id:
             return cred
-    return cred if cred and cred.get("token") else None
+    return None
 
 
 def get_user_gitea_token(user_id_or_username, instance_id: str = "") -> str:

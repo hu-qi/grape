@@ -1,4 +1,5 @@
 """GitLab OAuth: configured instances, browser-bound state and isolated identities."""
+import json
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import Mock, patch
 
@@ -62,6 +63,17 @@ def test_single_and_multi_selection(configured):
     assert configured.get('/api/auth/login/gitlab?instance=public').status_code == 400
     config_store.save_config({'gitlab_mode': 'multi'})
     assert len(configured.get('/api/auth/gitlab/instances').json()['instances']) == 2
+
+
+def test_seed_token_mode_enables_login_without_legacy_flag(configured):
+    from src.user.gitlab_config import get_login_instance
+    seed = {'gitlab_mode': 'single', 'gitlab_default_instance': 'private',
+            'gitlab_instances': [{'id': 'private', 'name': 'Private',
+                                  'base_url': 'https://gitlab.example.test', 'auth_mode': 'token'}]}
+    with open(config_store._GBT_PATH, 'w', encoding='utf-8') as stream:
+        json.dump(seed, stream)
+    assert get_login_instance('private')['allow_token_login'] is True
+    assert configured.get('/api/auth/gitlab/instances').json()['instances'][0]['allow_token_login'] is True
 
 
 def test_authorize_uses_instance_and_pkce(configured):

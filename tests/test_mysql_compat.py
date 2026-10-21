@@ -98,6 +98,10 @@ class TestTranslateSql:
     def test_sqlite_master_name_to_show_tables(self):
         assert mc.translate_sql("SELECT name FROM sqlite_master WHERE type='table'") == "SHOW TABLES"
 
+    def test_sqlite_master_filtered_name_is_handled_by_cursor(self):
+        sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='user_accounts'"
+        assert mc.translate_sql(sql) == sql
+
     def test_sqlite_master_sql_marked(self):
         sql = "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
         assert mc.translate_sql(sql) == sql
@@ -152,7 +156,7 @@ class TestTranslateSql:
     def test_delete_not_in_same_table_wrapped(self):
         sql = "DELETE FROM issue WHERE id NOT IN (SELECT id FROM issue WHERE status='active')"
         out = mc.translate_sql(sql)
-        assert "DELETE FROM `tasks`" in out
+        assert "DELETE FROM `issue`" in out
         assert "AS __derived" in out
 
     def test_delete_not_in_other_table_not_wrapped(self):
@@ -292,6 +296,20 @@ class TestCompatCursor:
         assert "information_schema.statistics" in raw.execute.call_args[0][0]
         assert cur.fetchall() == [(0, "idx_x", 1)]
 
+    def test_pragma_index_list_accepts_quoted_table(self):
+        db, raw = self._cursor([(0, "idx_x", 1)])
+        cur = db.cursor()
+        cur.execute("PRAGMA index_list('issue')")
+        assert "information_schema.statistics" in raw.execute.call_args[0][0]
+        assert cur.fetchall() == [(0, "idx_x", 1)]
+
+    def test_cursor_can_be_iterated_like_sqlite_cursor(self):
+        db, raw = self._cursor()
+        raw.fetchone.side_effect = [(1,), (2,), None]
+        cur = db.cursor()
+        cur.execute("SELECT id FROM users")
+        assert list(cur) == [(1,), (2,)]
+
     def test_pragma_index_info(self):
         db, raw = self._cursor([(0, 0, "name")])
         cur = db.cursor()
@@ -304,6 +322,18 @@ class TestCompatCursor:
         cur = db.cursor()
         cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
         assert cur.fetchall() == [("CREATE TABLE users (id int, name text)",)]
+
+    @pytest.mark.parametrize("sql,params", [
+        ("SELECT name FROM sqlite_master WHERE type='table' AND name='user_accounts'", None),
+        ("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ("user_accounts",)),
+    ])
+    def test_sqlite_master_filtered_name_uses_mysql_metadata(self, sql, params):
+        db, raw = self._cursor([("user_accounts",)])
+        cur = db.cursor()
+        cur.execute(sql, params)
+        assert "information_schema.tables" in raw.execute.call_args[0][0]
+        assert raw.execute.call_args[0][1] == ("user_accounts",)
+        assert cur.fetchone() == ("user_accounts",)
 
     def test_sqlite_master_sql_no_row(self):
         db, raw = self._cursor([])

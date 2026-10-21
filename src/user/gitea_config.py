@@ -124,9 +124,9 @@ def login_instances() -> tuple[str, list[dict]]:
         if auth_mode == 'none':
             continue
         if auth_mode == 'oauth' and all(item.get(k) for k in ('client_id', 'client_secret', 'redirect_uri')):
-            entries.append(item)
+            entries.append({**item, 'auth_mode': auth_mode, 'allow_token_login': False})
         elif auth_mode == 'token':
-            entries.append(item)
+            entries.append({**item, 'auth_mode': auth_mode, 'allow_token_login': True})
 
     if mode == 'single':
         entries = [item for item in entries if item['id'] == data.get('gitea_default_instance')]
