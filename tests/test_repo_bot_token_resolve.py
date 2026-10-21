@@ -174,3 +174,34 @@ def test_upsert_overwrites_token_when_given():
         assert get_repo_bot_token("gitea:org/toku2") == "T_NEW"
     finally:
         _clean(["gitea:org/toku2"])
+
+
+def test_gitea_env_token_fallback(monkeypatch):
+    """当无仓库配置和会话配置时，支持从环境变量 GITEA_BOT_TOKEN 兜底。"""
+    import src.user.db as udb
+    monkeypatch.setenv("GITEA_BOT_TOKEN", "T_GITEA_ENV")
+    monkeypatch.setattr(udb, "_load_global_bot_config", lambda: {})
+    assert udb.get_repo_bot_token("gitea:org/envtest") == "T_GITEA_ENV"
+
+
+def test_meta_table_instance_token_persistence(monkeypatch):
+    """当文件中 token 为空时，能从 meta 表读取之前同步的实例 token。"""
+    import json
+    from src.user.db import set_meta_value, get_repo_bot_token
+    from src.admin.config_store import load_config
+    insts = [{
+        "id": "private_gitea",
+        "base_url": "http://172.16.145.202:30344",
+        "token": "T_META_GITEA",
+        "enabled": True,
+    }]
+    set_meta_value("config_gitea_instances", json.dumps(insts))
+    monkeypatch.delenv("GITEA_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("GITEA_TOKEN", raising=False)
+    # mock 文件里没有 token
+    monkeypatch.setattr("src.admin.config_store._GBT_PATH", "/tmp/non_existent_gbt.json")
+    monkeypatch.setattr("src.admin.config_store._SEED_PATH", "/tmp/non_existent_seed.json")
+    loaded = load_config()
+    assert loaded.get("gitea_instances", [{}])[0].get("token") == "T_META_GITEA"
+    assert get_repo_bot_token("gitea:org/metatest") == "T_META_GITEA"
+

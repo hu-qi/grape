@@ -1484,14 +1484,10 @@ def get_repo_bot_token_no_global(repo_key: str) -> str:
 
 
 def _load_global_bot_config() -> dict:
-    """读取 configs/global-bot-token.json（文件是唯一权威源，见 src/admin/config_store.py）"""
-    import json, os
+    """读取 configs/global-bot-token.json（含 seed 引导与 MySQL meta 兜底，见 src/admin/config_store.py）"""
     try:
-        _gbt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "configs", "global-bot-token.json")
-        if os.path.exists(_gbt_path):
-            with open(_gbt_path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            return d if isinstance(d, dict) else {}
+        from src.admin.config_store import load_config
+        return load_config()
     except Exception as e:
         log.warning(f"Failed to load global bot config: {e}")
     return {}
@@ -1513,16 +1509,21 @@ def _instance_token(cfg: dict, provider: str) -> str:
 
 
 def get_global_token_for_provider(provider: str = "gitcode") -> str:
-    """按平台取全局/实例级兜底 token。
+    """按平台取全局/实例级兜底 token。优先环境变量，其次实例/全局配置。
 
     Gitea/GitLab 没有独立的仓库 bot token 配置，兜底用实例配置里的系统 token
     （gitea_instances/gitlab_instances 的 token 字段，管理员在设置页配置）。
     """
+    import os
     if provider == "github":
-        return _load_global_bot_config().get("github_bot_token", "") or ""
+        return os.environ.get("GITHUB_BOT_TOKEN") or _load_global_bot_config().get("github_bot_token", "") or ""
     if provider in ("gitea", "gitlab"):
+        env_key = f"{provider.upper()}_BOT_TOKEN"
+        env_tok = os.environ.get(env_key) or os.environ.get(f"{provider.upper()}_TOKEN") or os.environ.get(f"GRAPE_{provider.upper()}_TOKEN")
+        if env_tok:
+            return env_tok
         return _instance_token(_load_global_bot_config(), provider)
-    return _get_global_bot_token()
+    return os.environ.get("GITCODE_API_TOKEN") or os.environ.get("GITCODE_BOT_TOKEN") or _get_global_bot_token()
 
 
 def _get_global_bot_token() -> str:

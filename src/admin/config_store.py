@@ -72,7 +72,37 @@ def load_config() -> dict:
         if os.path.exists(_GBT_PATH):
             with open(_GBT_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data if isinstance(data, dict) else {}
+                if not isinstance(data, dict):
+                    data = {}
+        else:
+            data = {}
+        # 若文件中实例 token 为空或无实例，从 MySQL meta 表兜底恢复（容器重建不丢凭证）
+        try:
+            from src.user.db import get_meta_value
+            for inst_key in ("gitea_instances", "gitlab_instances"):
+                mv = get_meta_value(f"config_{inst_key}")
+                if mv:
+                    db_insts = json.loads(mv)
+                    if isinstance(db_insts, list) and db_insts:
+                        file_insts = data.get(inst_key) or []
+                        if not file_insts:
+                            data[inst_key] = db_insts
+                        else:
+                            # 按 id 补齐 token
+                            db_map = {item["id"]: item for item in db_insts if isinstance(item, dict) and item.get("id")}
+                            for fit in file_insts:
+                                if isinstance(fit, dict) and not fit.get("token"):
+                                    matched = db_map.get(fit.get("id"))
+                                    if matched and matched.get("token"):
+                                        fit["token"] = matched["token"]
+            for tok_key in ("gitcode_api_token", "github_bot_token"):
+                if not data.get(tok_key):
+                    mv = get_meta_value(f"config_{tok_key}")
+                    if mv:
+                        data[tok_key] = mv
+        except Exception:
+            pass
+        return data
     except Exception as e:
         log.warning(f"admin config_store: load failed: {e}")
     return {}
@@ -150,6 +180,11 @@ def save_config(payload: dict) -> dict:
         val = data.get(src_key, "")
         if val:
             set_meta_value(meta_key, val)
+    # 同步实例与全局 bot token 到 meta 表（MySQL 持久化，防容器重建/未挂载卷清空配置）
+    for inst_key in ("gitea_instances", "gitlab_instances", "gitcode_api_token", "github_bot_token"):
+        val = data.get(inst_key)
+        if val:
+            set_meta_value(f"config_{inst_key}", json.dumps(val) if isinstance(val, (dict, list)) else str(val))
     return read_public_config()
 
 
