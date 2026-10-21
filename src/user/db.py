@@ -1531,18 +1531,85 @@ def _get_global_bot_token() -> str:
     return _load_global_bot_config().get("gitcode_api_token", "") or ""
 
 
+def _get_repo_owner_or_admin_token(provider: str, owner: str, keys: list[str]) -> str:
+    """按仓库所有者 (owner) 或托管该仓库的管理员用户查其平台凭据 (PAT / OAuth token) 兜底。
+
+    支持 Gitea (credentials 表 gitea_login)、GitLab (credentials 表 gitlab_login)、
+    GitHub (user_accounts.github_api_token)、GitCode (user_accounts.gitcode_api_token)。
+    """
+    try:
+        # 1. 优先查 owner
+        if owner:
+            if provider == "gitea":
+                tok = get_user_gitea_token(owner)
+                if tok:
+                    return tok
+            elif provider == "gitlab":
+                tok = get_user_gitlab_token(owner)
+                if tok:
+                    return tok
+            elif provider == "github":
+                with db_lock:
+                    c = db.cursor()
+                    c.execute("SELECT github_api_token FROM user_accounts WHERE username=? AND github_api_token!='' LIMIT 1", (owner,))
+                    row = c.fetchone()
+                    if row and row[0]:
+                        return row[0]
+            elif provider == "gitcode":
+                with db_lock:
+                    c = db.cursor()
+                    c.execute("SELECT gitcode_api_token FROM user_accounts WHERE username=? AND gitcode_api_token!='' LIMIT 1", (owner,))
+                    row = c.fetchone()
+                    if row and row[0]:
+                        return row[0]
+        # 2. 尝试从 user_repos 查托管该仓库的管理员用户 (is_admin=1)
+        if keys:
+            _ph = ",".join("?" * len(keys))
+            with db_lock:
+                c = db.cursor()
+                c.execute(
+                    f"SELECT user_id FROM user_repos WHERE repo_key IN ({_ph}) AND is_admin=1 ORDER BY user_id ASC",
+                    tuple(keys)
+                )
+                admin_rows = c.fetchall()
+            for r in admin_rows:
+                uid = r[0]
+                if provider == "gitea":
+                    tok = get_user_gitea_token(uid)
+                    if tok:
+                        return tok
+                elif provider == "gitlab":
+                    tok = get_user_gitlab_token(uid)
+                    if tok:
+                        return tok
+                elif provider == "github":
+                    with db_lock:
+                        c = db.cursor()
+                        c.execute("SELECT github_api_token FROM user_accounts WHERE id=? AND github_api_token!='' LIMIT 1", (uid,))
+                        row = c.fetchone()
+                        if row and row[0]:
+                            return row[0]
+                elif provider == "gitcode":
+                    with db_lock:
+                        c = db.cursor()
+                        c.execute("SELECT gitcode_api_token FROM user_accounts WHERE id=? AND gitcode_api_token!='' LIMIT 1", (uid,))
+                        row = c.fetchone()
+                        if row and row[0]:
+                            return row[0]
+    except Exception as e:
+        log.warning(f"_get_repo_owner_or_admin_token failed: {e}")
+    return ""
+
+
 def resolve_repo_bot_token(repo_key: str) -> tuple[str, str]:
     """解析仓库 bot token，返回 (token, 来源)。
 
-    来源：agent_session / managed_repos / global（全局或实例级）/ ""（三层均无值）。
-    解析顺序（与旧 get_gitcode_token 一致，但平台感知）：
+    来源：agent_session / managed_repos / user_credential / global（全局或实例级）/ ""（四层均无值）。
+    解析顺序：
       1. devops_agent_session.repo_gitcode_token（Agent 配置，跨平台候选）
       2. managed_repos.bot_gitcode_token / bot_github_token（仓库配置，跨平台候选）
-      3. 全局/实例级：gitcode_api_token / github_bot_token / gitea|gitlab_instances[].token
-
-    2026-10-21 修复：旧实现只在 github: 与「其它」两条分支分流，gitea:/gitlab: 仓库
-    既查不到仓库级 token 也没有兜底 → repo_gitcode_token 恒空，vod/issue/coding/qa/sre
-    派发全被 dependency_check 拦下。
+      3. 仓库 owner 或管理员在平台上的登录凭据（PAT / OAuth token，支持 Gitea/GitLab/GitHub/GitCode）
+      4. 全局/实例级：gitcode_api_token / github_bot_token / gitea|gitlab_instances[].token
     """
     from src.repo_key import parse_repo_key, cross_provider_keys
     if not repo_key:
@@ -1573,7 +1640,23 @@ def resolve_repo_bot_token(repo_key: str) -> tuple[str, str]:
     tok = get_bot_token_by_repo(owner, name, provider=provider)
     if tok:
         return tok, "managed_repos"
-    # 3. 全局/实例级兜底
+    # 3. 仓库所有者或托管管理员凭证兜底（PAT / 登录 token）
+    utok = _get_repo_owner_or_admin_token(provider or "gitcode", owner, keys)
+    if utok:
+        # 自动自愈补齐 managed_repos.bot_gitcode_token
+        try:
+            with db_lock:
+                c = db.cursor()
+                _ph = ",".join("?" * len(keys))
+                c.execute(
+                    f"UPDATE managed_repos SET bot_gitcode_token=? WHERE repo_key IN ({_ph}) AND (bot_gitcode_token IS NULL OR bot_gitcode_token='')",
+                    (utok, *keys)
+                )
+                db.commit()
+        except Exception as e:
+            log.warning(f"resolve_repo_bot_token: auto-heal managed_repos bot token failed: {e}")
+        return utok, "user_credential"
+    # 4. 全局/实例级兜底
     gtok = get_global_token_for_provider(provider or "gitcode")
     if gtok:
         return gtok, "global"
@@ -1581,13 +1664,14 @@ def resolve_repo_bot_token(repo_key: str) -> tuple[str, str]:
 
 
 def repo_token_layer_status(repo_key: str) -> dict:
-    """三层 token 是否取到值（只回 bool，不回明文），用于排障日志。"""
+    """四层 token 是否取到值（只回 bool，不回明文），用于排障日志。"""
     from src.repo_key import parse_repo_key
     _prov, _owner, _name = parse_repo_key(repo_key or "")
     _tok, _src = resolve_repo_bot_token(repo_key)
     return {
         "agent_session": _src == "agent_session",
         "managed_repos": _src == "managed_repos",
+        "user_credential": _src == "user_credential",
         "global": _src == "global",
         "source": _src,
         "provider": _prov or "",

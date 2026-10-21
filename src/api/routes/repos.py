@@ -756,7 +756,7 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
             hook_id = setup_gitea_webhook(api_token, owner, repo_name, webhook_url, base_url=base)
             from src.api.onboarding import cleanup_stale_repo_data
             cleanup_stale_repo_data(repo_key)
-            user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, org_id=_org_id)
+            user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, bot_gitcode_token=api_token, org_id=_org_id)
             user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
             ensure_default_agent_sessions(repo_key)
             return {"message": "Gitea 仓库托管成功", "webhook_id": hook_id}
@@ -777,7 +777,7 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
             hook_id = setup_gitlab_webhook(api_token, body.full_name, webhook_url, base_url=base)
             from src.api.onboarding import cleanup_stale_repo_data
             cleanup_stale_repo_data(repo_key)
-            user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, org_id=_org_id)
+            user_db.add_managed_repo(repo_key, owner, repo_name, webhook_id=hook_id, bot_gitcode_token=api_token, org_id=_org_id)
             user_db.mark_user_repo_join(user["id"], repo_key, is_join=True, is_admin=True)
             ensure_default_agent_sessions(repo_key)
             return {"message": "GitLab 项目托管成功", "webhook_id": hook_id}
@@ -1066,17 +1066,44 @@ def get_repo_bot_token(owner: str, repo_name: str, user: dict = Depends(require_
 @router.put("/bot-token", operation_id="repos_bot_token_set", summary="Set repository bot token", description="Sets the repository DevOps bot token and automatically adds the repo bot as a maintainer.")
 def set_repo_bot_token(body: BotTokenBody, user: dict = Depends(require_no_session_token)):
     """设置仓库绑定的 DevOps Bot Token；自动将 repo bot 加入维护者"""
-    from src.repo_key import to_repo_key
-    parts = body.full_name.split("/", 1)
+    from src.repo_key import to_repo_key, cross_provider_keys, parse_repo_key
+    _raw_name = body.full_name.split(":", 1)[1] if ":" in body.full_name else body.full_name
+    parts = _raw_name.split("/", 1)
     if len(parts) != 2:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "无效的仓库标识"})
     owner, repo_name = parts
-    repo_key = to_repo_key(body.full_name)
+
+    candidates = [body.full_name] if ":" in body.full_name else cross_provider_keys(body.full_name)
+    repo_key = ""
+    try:
+        from src.session_manager import db as _db, db_lock as _dl
+        with _dl:
+            c = _db.cursor()
+            placeholders = ",".join("?" * len(candidates))
+            row = c.execute(f"SELECT repo_key FROM managed_repos WHERE repo_key IN ({placeholders}) LIMIT 1",
+                            tuple(candidates)).fetchone()
+            if row:
+                repo_key = row[0]
+    except Exception:
+        pass
+    if not repo_key:
+        repo_key = to_repo_key(body.full_name)
+
     from src.api.deps import check_repo_access
     check_repo_access(user, repo_key)
     ok = update_managed_repo_bot_token(repo_key, body.bot_token)
     if not ok:
         raise HTTPException(status_code=404, detail={"code": 404, "message": "仓库未找到"})
+
+    # 同步把 token 写入已有的 devops_agent_session
+    try:
+        from src.session_manager import db as _db, db_lock as _dl
+        with _dl:
+            c = _db.cursor()
+            c.execute("UPDATE devops_agent_session SET repo_gitcode_token=? WHERE repo_key=?", (body.bot_token, repo_key))
+            _db.commit()
+    except Exception:
+        pass
 
     # 用新 token 获取 VCS 真实登录名，更新 bot_username
     repo_bot_username = ""

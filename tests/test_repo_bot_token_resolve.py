@@ -205,3 +205,46 @@ def test_meta_table_instance_token_persistence(monkeypatch):
     assert loaded.get("gitea_instances", [{}])[0].get("token") == "T_META_GITEA"
     assert get_repo_bot_token("gitea:org/metatest") == "T_META_GITEA"
 
+
+def test_repo_bot_token_falls_back_to_gitea_user_credential():
+    """当无 agent session、无仓库 token、无全局配置时，自动从仓库 owner 的 Gitea 登录凭证兜底并自愈。"""
+    from src.session_manager import db, db_lock
+    import src.user.db as udb
+
+    repo_key = "gitea:dev/snake_test_cred"
+    _clean([repo_key])
+    _seed_repo(repo_key, bot_token="")
+
+    with db_lock:
+        c = db.cursor()
+        c.execute("DELETE FROM user_accounts WHERE username='dev_test_user'")
+        c.execute("INSERT INTO user_accounts (username, password_hash) VALUES ('dev_test_user', 'hash')")
+        uid = c.lastrowid
+        db.commit()
+
+    try:
+        # 给该用户写入 Gitea 登录凭证
+        udb.set_credential(uid, "gitea_login", {"token": "T_GITEA_USER_PAT", "instance": "private_gitea"})
+        # 将仓库绑定至 user_repos，设为管理员
+        udb.mark_user_repo_join(uid, repo_key, is_join=True, is_admin=True)
+
+        tok, src = udb.resolve_repo_bot_token(repo_key)
+        assert tok == "T_GITEA_USER_PAT"
+        assert src == "user_credential"
+
+        # 检查自愈：managed_repos 表里已被自动补齐
+        with db_lock:
+            c = db.cursor()
+            c.execute("SELECT bot_gitcode_token FROM managed_repos WHERE repo_key=?", (repo_key,))
+            row = c.fetchone()
+            assert row and row[0] == "T_GITEA_USER_PAT"
+    finally:
+        _clean([repo_key])
+        with db_lock:
+            c = db.cursor()
+            c.execute("DELETE FROM user_credentials WHERE user_id=?", (uid,))
+            c.execute("DELETE FROM user_repos WHERE repo_key=?", (repo_key,))
+            c.execute("DELETE FROM user_accounts WHERE id=?", (uid,))
+            db.commit()
+
+
