@@ -63,11 +63,11 @@ def test_t7_assignees_converted():
 
 def test_t10_unknown_provider_raises():
     with pytest.raises(ValueError):
-        translate_inbound("gitlab", "issues", "create", {}, {})
+        translate_inbound("bitbucket", "issues", "create", {}, {})
 
 
 def test_module_import_and_registry():
-    assert set(providers._MODULES) == {"gitcode", "github"}
+    assert set(providers._MODULES) == {"gitcode", "github", "gitlab"}
 
 
 def test_provider_required_fail_fast_no_gitcode_default():
@@ -81,11 +81,11 @@ def test_provider_required_fail_fast_no_gitcode_default():
     assert '(owner, repo, "", None)' not in src  # 旧漏传形式已消除
 
     with pytest.raises(ValueError):
-        g._vcs_url("o", "r", "", None, "gitlab")
+        g._vcs_url("o", "r", "", None, "bitbucket")
     with pytest.raises(ValueError):
         g._vcs_url("o", "r", "", None, "")
     with pytest.raises(ValueError):
-        g._repo_token("o", "r", {}, "gitlab")
+        g._repo_token("o", "r", {}, "bitbucket")
 
 
 def test_all_route_calls_pass_provider():

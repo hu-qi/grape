@@ -647,7 +647,8 @@ def check_repo_access(user: dict, repo_key: str) -> None:
     rk = to_repo_key(repo_key)
     # 构建候选 repo_key 列表：原始 + 跨平台前缀（gitcode:↔github:）
     base = rk.split(":", 1)[1] if ":" in rk else rk
-    candidates = {f"gitcode:{base}", f"github:{base}"}
+    from src.vcs.gitlab_config import is_gitlab
+    candidates = {rk} if is_gitlab(rk.split(":", 1)[0]) else {f"gitcode:{base}", f"github:{base}"}
     repos = user_db.get_managed_repos(uid)
     for r in repos:
         if r["repo_key"] in candidates:

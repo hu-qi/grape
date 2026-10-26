@@ -731,6 +731,14 @@ def resolve_pr_issue_id(payload: dict, api_token: str = "", repo_key: str = "") 
                 repo_path = repo.get("full_name", "")
         if repo_path and "/" in repo_path:
             try:
+                from src.vcs.gitlab_config import is_gitlab, get_instance
+                from src.repo_key import parse_repo_key
+                if is_gitlab(parse_repo_key(repo_key)[0]):
+                    from src.vcs.gitlab_manager import project_path
+                    from src.vcs.gitlab_http import request as _gl_request
+                    data = _gl_request(parse_repo_key(repo_key)[0], "GET", project_path(repo_path) + f"/merge_requests/{pr_number}", api_token)
+                    issue = _extract_issue_id_from_text(data.get("title", "") + " " + data.get("description", ""))
+                    return issue
                 if _is_github_repo(repo_key):
                     url = f"https://api.github.com/repos/{repo_path}/pulls/{pr_number}"
                     hdrs = {"Authorization": f"Bearer {api_token}",
@@ -2447,6 +2455,11 @@ def _get_repo_api_token(repo_key: str) -> str:
 
     GitHub → get_github_token；GitCode → get_repo_token_with_refresh。
     """
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        from src.vcs.gitlab_credentials import repo_token
+        return repo_token(repo_key)
     if _is_github_repo(repo_key):
         try:
             from src.user.db import get_github_token
@@ -2547,6 +2560,12 @@ def _fetch_issue_assignee(repo_key: str, issue_id: str) -> str:
         from src.repo_key import split_owner_repo
         owner, rname = split_owner_repo(repo_key)
 
+        from src.vcs.gitlab_config import is_gitlab
+        from src.repo_key import parse_repo_key
+        if is_gitlab(parse_repo_key(repo_key)[0]):
+            from src.vcs.api_client import create_client
+            d = create_client(repo_key).get_issue(int(num))
+            return (d.get("assignee") or {}).get("login", "") or ""
         if _is_github_repo(repo_key):
             from src.user.db import get_github_token
             tok = get_github_token(repo_key=repo_key) or ""
@@ -2597,6 +2616,12 @@ def _fetch_issue_title_via_api(repo_key: str, issue_id: str) -> str:
         from src.repo_key import split_owner_repo
         owner, rname = split_owner_repo(repo_key)
 
+        from src.vcs.gitlab_config import is_gitlab
+        from src.repo_key import parse_repo_key
+        if is_gitlab(parse_repo_key(repo_key)[0]):
+            from src.vcs.api_client import create_client
+            d = create_client(repo_key).get_issue(int(num))
+            return d.get("title", "") or ""
         if _is_github_repo(repo_key):
             from src.user.db import get_github_token
             tok = get_github_token(repo_key=repo_key) or ""
@@ -4194,6 +4219,23 @@ def _post_result_to_issue(repository: str, issue_number, result_text: str, bot_t
     if not _conclusion:
         _conclusion = f"任务已完成（{agent_type} agent）。"
 
+    from src.vcs.gitlab_config import is_gitlab, get_instance
+    from src.repo_key import parse_repo_key
+    _provider, _owner, _repo = parse_repo_key(repo_key)
+    if is_gitlab(_provider):
+        from src.vcs.api_client import create_client
+        from src.vcs.gitlab_http import request as _gl_request
+        from src.vcs.gitlab_manager import project_path
+        client = create_client(repo_key, bot_token)
+        comments = _gl_request(_provider, "GET", project_path(f"{_owner}/{_repo}") + f"/issues/{issue_number}/notes", bot_token)
+        for comment in comments:
+            if f"[{agent_type.upper()} Agent]" in comment.get("body", ""):
+                return
+        result = client.post_issue_comment(int(issue_number), f"[{agent_type.upper()} Agent] {_conclusion}\n<!-- grape-auto-comment -->")
+        if result.get("error"):
+            raise RuntimeError(result["error"])
+        return
+
     # 根据 repo_key provider 分流
     if _is_github_repo(repo_key):
         try:
@@ -4255,6 +4297,14 @@ def _post_subtask_completion_to_parent(repository: str, sub_issue_num: str, pare
         _summary = (_out.get("conclusion", "") if _out else "") or result_text[:200]
         _comment = f"### \u5b50\u4efb\u52a1 #{sub_issue_num} \u5df2\u5b8c\u6210\n\n{_summary}\n\n---\n\u5b50\u4efb\u52a1\u6d41\u6c34\u7ebf\u5df2\u5168\u90e8\u5b8c\u6210\u3002"
         _comment += "\n<!-- grape-auto-comment -->"
+        from src.vcs.gitlab_config import is_gitlab
+        from src.repo_key import parse_repo_key
+        if is_gitlab(parse_repo_key(repo_key)[0]):
+            from src.vcs.api_client import create_client
+            result = create_client(repo_key, bot_token).post_issue_comment(int(parent_issue_num), _comment)
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            return
         if _is_github_repo(repo_key):
             from src.repo_key import split_owner_repo
             _owner, _repo = split_owner_repo(repo_key)
@@ -4283,6 +4333,14 @@ def _post_all_subtasks_done(repository: str, parent_issue_num: str, subtasks: li
         _lines.append(f"\n\u7236\u4efb\u52a1 #{parent_issue_num} \u7684\u6240\u6709\u5b50\u4efb\u52a1\u5df2\u5b8c\u6210\u3002")
         _comment = "\n".join(_lines)
         _comment += "\n<!-- grape-auto-comment -->"
+        from src.vcs.gitlab_config import is_gitlab
+        from src.repo_key import parse_repo_key
+        if is_gitlab(parse_repo_key(repo_key)[0]):
+            from src.vcs.api_client import create_client
+            result = create_client(repo_key, bot_token).post_issue_comment(int(parent_issue_num), _comment)
+            if result.get("error"):
+                raise RuntimeError(result["error"])
+            return
         if _is_github_repo(repo_key):
             from src.repo_key import split_owner_repo
             _owner, _repo = split_owner_repo(repo_key)
@@ -4319,6 +4377,15 @@ def _post_result_to_pr(repository: str, pr_number: str, result_text: str, bot_to
         _conclusion = f"PR 审查任务已完成（{agent_type} agent）。"
     _comment = f"[{agent_type.upper()} Agent] {_conclusion}"
     _comment += "\n<!-- grape-auto-comment -->"
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    provider, owner, name = parse_repo_key(repo_key)
+    if is_gitlab(provider):
+        from src.vcs.gitlab_manager import project_path
+        from src.vcs.gitlab_http import request
+        response = request(provider, "POST", project_path(f"{owner}/{name}") + f"/merge_requests/{pr_number}/notes", bot_token, {"body": _comment})
+        _ledger_record_comment(provider, repo_key, repository, pr_number, _comment, response)
+        return
     try:
         import urllib.request, json as _json
         if _is_github_repo(repo_key):
@@ -4398,7 +4465,15 @@ def _sync_issue_comments_to_conversation(repo_key: str, issue_number, bot_token:
     # 2) 从 VCS API 拉取 Issue 评论
     comments = []
     try:
-        if _is_github_repo(rk):
+        from src.vcs.gitlab_config import is_gitlab
+        from src.repo_key import parse_repo_key
+        provider, owner, name = parse_repo_key(rk)
+        if is_gitlab(provider):
+            from src.vcs.gitlab_manager import project_path
+            from src.vcs.gitlab_http import request
+            from src.vcs.providers.gitlab import normalize_response
+            comments = normalize_response(request(provider, "GET", project_path(f"{owner}/{name}") + f"/issues/{issue_number}/notes", bot_token))
+        elif _is_github_repo(rk):
             # GitHub API
             from src.repo_key import split_owner_repo
             _owner, _repo = split_owner_repo(rk)

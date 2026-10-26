@@ -16,6 +16,45 @@ function renderSettings(tab) {
     html += `<div id="sGitcode"><div class="loading">${I18N.t('settings.common.loading')}</div></div></div>`;
     el.innerHTML = html;
 
+    if (/^gitlab(?:@[^:]+)?:/.test(repo.repoKey || '')) {
+      var panel = document.getElementById('sGitcode');
+      var button = document.createElement('button');
+      button.className = 'bt bt-p';
+      button.textContent = I18N.getLang() === 'zh' ? '管理 GitLab 连接' : 'Manage GitLab connection';
+      button.onclick = function() { app.nav('account', 'gitlab'); };
+      var remove = document.createElement('button');
+      remove.className = 'bt bt-o';
+      remove.textContent = I18N.getLang() === 'zh' ? '解除托管' : 'Remove hosting';
+      remove.onclick = function() {
+        app.showConfirm(I18N.t('settings.host.confirm_remove', {name: repo.fullName}), function() {
+          API.post('/gitlab/remove', {provider: repo.repoKey.split(':')[0], project: repo.fullName}).then(function() {
+            sessionStorage.removeItem('currentRepo');
+            localStorage.removeItem('repo_member_cache');
+            app.goToRepos();
+          }).catch(function(e) { app.showToast(e.message); });
+        }, {danger: true});
+      };
+      var botInput = document.createElement('input');
+      botInput.type = 'password';
+      botInput.autocomplete = 'new-password';
+      botInput.placeholder = 'GitLab Bot Token';
+      botInput.setAttribute('aria-label', 'GitLab Bot Token');
+      var saveBot = document.createElement('button');
+      saveBot.className = 'bt bt-o';
+      saveBot.textContent = I18N.getLang() === 'zh' ? '保存 Bot Token' : 'Save Bot Token';
+      saveBot.onclick = function() {
+        var token = botInput.value.trim();
+        botInput.value = '';
+        if (!token) return;
+        API.put('/gitlab/bot-token', {provider: repo.repoKey.split(':')[0], project: repo.fullName, token: token})
+          .then(function() { app.showToast(I18N.getLang() === 'zh' ? 'Bot Token 已更新' : 'Bot Token updated'); })
+          .catch(function(e) { app.showToast(e.message); });
+        token = '';
+      };
+      panel.replaceChildren(button, botInput, saveBot, remove);
+      return;
+    }
+
     API.get('/settings/gitcode-repo/' + repo.owner + '/' + repo.name).then(d => {
         var _sg = document.getElementById('sGitcode');
         if (!_sg) return;

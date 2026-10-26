@@ -100,24 +100,38 @@ def ensure_feature_branch(wt_dir: str, target_branch: str, base_branch: str,
 
 
 def clone_url_for(repo_key: str) -> str:
-    from src.repo_key import parse_repo_key
-    provider, owner, repo = parse_repo_key(repo_key)
-    host = _HOSTS.get(provider, _HOSTS["gitcode"])
-    return f"https://{host}/{owner}/{repo}.git"
+    from src.repo import Repo
+    return Repo(repo_key).clone_url
 
 
 def _basic_auth(token: str) -> str:
     return base64.b64encode(f"x-access-token:{token}".encode()).decode()
 
 
-def _run_git(args: list, token: str = "", timeout: int = 900):
+def _run_git(args: list, token: str = "", timeout: int = 900, repo_key: str = ""):
     """执行 git；token 经 `-c http.extraheader` 注入（不落盘、不进日志）。"""
     cmd = ["git"]
-    if token:
+    if token and not repo_key.startswith("gitlab"):
         cmd += ["-c", f"http.extraheader=Authorization: Basic {_basic_auth(token)}"]
     cmd += args
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
+    if repo_key.startswith('gitlab'):
+        from src.repo_key import parse_repo_key
+        from src.vcs.gitlab_config import get_instance
+        instance = get_instance(parse_repo_key(repo_key)[0])
+        env.pop('GIT_SSL_NO_VERIFY', None)
+        settings = [('http.sslVerify', 'true'), ('http.followRedirects', 'false')]
+        if instance.ca_bundle:
+            settings.append(('http.sslCAInfo', instance.ca_bundle))
+        if token:
+            settings.append((f'http.{instance.url}/.extraHeader', 'Authorization: Basic ' + _basic_auth(token)))
+        offset = int(env.get('GIT_CONFIG_COUNT', '0'))
+        for index, (key, value) in enumerate(settings, offset):
+            env[f'GIT_CONFIG_KEY_{index}'] = key
+            env[f'GIT_CONFIG_VALUE_{index}'] = value
+        env['GIT_CONFIG_COUNT'] = str(offset + len(settings))
+
     try:
         return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     except Exception as e:
@@ -142,7 +156,7 @@ def ensure_repo_base(repo_key: str, token: str = "") -> str | None:
                     log.warning(f"repogit init failed {repo_key}: {(r.stderr if r else 'git exec failed')[:300]}")
                     return None
                 _run_git(["-C", base, "remote", "add", "origin", url], token=token)
-            r = _run_git(["-C", base, "fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"], token=token)
+            r = _run_git(["-C", base, "fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"], token=token, **({"repo_key": repo_key} if repo_key.startswith("gitlab") else {}))
             if r is None or r.returncode != 0:
                 log.warning(f"repogit fetch failed {repo_key}: {(r.stderr if r else 'git exec failed')[:300]}")
                 return None
@@ -309,7 +323,11 @@ def _write_askpass(issue_dir: str, repo_key: str = "") -> str:
     返回实际可执行的脚本路径（原脚本或 wrapper）。
     """
     # R20.24.3: fallback 链加入 USER_*_TOKEN（路径 B 仓库用户 token）
-    if repo_key.startswith("github:"):
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        token_var = "${BOT_GITLAB_TOKEN:-${USER_GITLAB_TOKEN:-$BOT_TOKEN}}"
+    elif repo_key.startswith("github:"):
         token_var = "${BOT_GITHUB_TOKEN:-${USER_GITHUB_TOKEN:-${BOT_TOKEN:-$BOT_GITCODE_TOKEN}}}"
     else:
         token_var = "${BOT_GITCODE_TOKEN:-${USER_GITCODE_TOKEN:-${BOT_TOKEN:-$BOT_GITHUB_TOKEN}}}"
@@ -410,7 +428,7 @@ def remove_issue_worktree_if_pushed(repo_key: str, agent_type: str, issue_num, t
         if head is None or not (head.stdout or "").strip():
             return False
         local_head = head.stdout.strip()
-        remote = _run_git(["ls-remote", clone_url_for(repo_key), f"refs/heads/{branch}"], token=token)
+        remote = _run_git(["ls-remote", clone_url_for(repo_key), f"refs/heads/{branch}"], token=token, **({"repo_key": repo_key} if repo_key.startswith("gitlab") else {}))
         if remote is None:
             return False
         remote_out = (remote.stdout or "").strip()

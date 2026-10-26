@@ -262,6 +262,10 @@ python -m pytest tests/ -v
   - 特性建议请描述使用场景和预期行为
 - **飞书**：接入 Grape 后可在绑定的群中直接反馈
 
+## GitLab 接入
+
+支持 GitLab.com 与多个私有 GitLab 实例，使用 PAT 绑定、项目托管和独立 Webhook。配置、API 与验收边界见 [GitLab 接入说明](docs/gitlab/README.md)。
+
 ## License
 
 MIT

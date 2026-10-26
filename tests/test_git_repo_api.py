@@ -117,8 +117,8 @@ def test_provider_param_ignored_when_token_authoritative(_client, github_calls):
 
 
 def test_unknown_provider_rejected(_client):
-    """token 绑定未接入 provider（gitlab）→ 403 防御。"""
-    _override_user(f"gitlab:{OWNER}/{REPO}")
+    """token 绑定未接入 provider（bitbucket）→ 403 防御。"""
+    _override_user(f"bitbucket:{OWNER}/{REPO}")
     r = _get(_client, f"/api/git-repo/{OWNER}/{REPO}/branches")
     assert r.status_code == 403
     assert "未接入" in (r.json().get("detail", {}).get("message", ""))

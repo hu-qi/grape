@@ -1252,3 +1252,90 @@ async def a2a_endpoint(request: Request, body: A2AHandoffBody, user: dict | None
         seq = 0
 
     return {"status": "ok", "seq": seq, "agent": agent_name}
+
+
+def _claim_gitlab_delivery(provider, delivery_id):
+    """Persist delivery deduplication across processes/restarts; retain for 24 hours."""
+    if not delivery_id:
+        return True
+    if len(delivery_id) > 128:
+        raise HTTPException(400, 'Invalid GitLab delivery ID')
+    from src.session_manager import db, db_lock
+    with db_lock:
+        db.execute('CREATE TABLE IF NOT EXISTS gitlab_webhook_deliveries ('
+                   'provider VARCHAR(80) NOT NULL, delivery_id VARCHAR(128) NOT NULL, '
+                   'received_at DOUBLE NOT NULL, PRIMARY KEY (provider, delivery_id))')
+        db.execute('DELETE FROM gitlab_webhook_deliveries WHERE received_at<?', (time.time() - 86400,))
+        if db.execute('SELECT 1 FROM gitlab_webhook_deliveries WHERE provider=? AND delivery_id=?',
+                      (provider, delivery_id)).fetchone():
+            db.commit()
+            return False
+        try:
+            db.execute('INSERT INTO gitlab_webhook_deliveries (provider,delivery_id,received_at) VALUES (?,?,?)',
+                       (provider, delivery_id, time.time()))
+            db.commit()
+        except Exception:
+            db.rollback()
+            if db.execute('SELECT 1 FROM gitlab_webhook_deliveries WHERE provider=? AND delivery_id=?',
+                          (provider, delivery_id)).fetchone():
+                return False
+            raise
+    return True
+
+
+def _run_gitlab_delivery(body, headers, repo, repo_key, provider, delivery_id):
+    try:
+        return run_pipeline(body, headers, account=repo, repo_key_override=repo_key)
+    except Exception:
+        if delivery_id:
+            from src.session_manager import db, db_lock
+            with db_lock:
+                db.execute('DELETE FROM gitlab_webhook_deliveries WHERE provider=? AND delivery_id=?',
+                           (provider, delivery_id))
+                db.commit()
+        log.exception('GitLab pipeline dispatch failed')
+        raise
+
+
+@router.post('/webhook/gitlab')
+@router.post('/webhook/gitlab/{instance}')
+async def gitlab_webhook(request: Request, instance: str = 'default'):
+    import hmac
+    from src.vcs.gitlab_config import get_instance, validate_project
+    provider = 'gitlab' if instance == 'default' else 'gitlab@' + instance
+    try:
+        config = get_instance(provider)
+    except ValueError:
+        raise HTTPException(404, 'GitLab instance is not configured') from None
+    body = await request.body()
+    if len(body) > 10 * 1024 * 1024:
+        raise HTTPException(413, 'GitLab webhook body too large')
+    try:
+        payload = json.loads(body)
+        project = payload['project']
+        repo = validate_project(project['path_with_namespace'])
+        # Never trust a payload to choose where credentials are sent.
+        if project.get('web_url', '').rstrip('/') != config.web_url(repo):
+            raise ValueError('GitLab project instance mismatch')
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise HTTPException(400, 'Invalid GitLab project payload') from None
+    repo_key = f'{provider}:{repo}'
+    from src.user.db import get_webhook_secret
+    secret = get_webhook_secret(repo_key)
+    if not secret:
+        raise HTTPException(404, 'GitLab project is not hosted')
+    supplied = request.headers.get('X-Gitlab-Token', '')
+    if not supplied:
+        raise HTTPException(401, 'Missing GitLab webhook token')
+    if not hmac.compare_digest(secret.encode(), supplied.encode()):
+        raise HTTPException(403, 'Invalid GitLab webhook token')
+    payload = {key: value for key, value in payload.items() if not key.startswith('_')}
+    body = json.dumps(payload).encode('utf-8')
+    delivery_id = request.headers.get('X-Gitlab-Event-UUID', '')
+    if not _claim_gitlab_delivery(provider, delivery_id):
+        return {'status': 'duplicate'}
+    # Do not persist or pass the webhook secret to task payloads or event logs.
+    headers = {'X-Gitlab-Event': request.headers.get('X-Gitlab-Event', 'unknown')}
+    import asyncio
+    asyncio.ensure_future(asyncio.to_thread(_run_gitlab_delivery, body, headers, repo, repo_key, provider, delivery_id))
+    return {'status': 'ok', 'message': 'pipeline scheduled'}

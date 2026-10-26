@@ -18,7 +18,7 @@ from src.vcs.providers import (
     translate_inbound,
     translate_query_state,
 )
-from src.vcs.providers import _MODULES as _PROVIDER_MODULES
+from src.vcs.providers import _MODULES as _PROVIDER_MODULES, get_module
 
 router = APIRouter(prefix="/api/git-repo", tags=["git-repo"])
 
@@ -73,7 +73,9 @@ def _provider(user: dict = Depends(get_current_user_or_api_key)) -> str:
     """
     from src.repo_key import parse_repo_key
     p = parse_repo_key(user.get("repo_key") or "")[0] or "gitcode"
-    if p not in _SUPPORTED_PROVIDERS:
+    try:
+        get_module(p)
+    except ValueError:
         raise HTTPException(status_code=403, detail={"code": 403, "message": f"Git provider 未接入: {p}"})
     return p
 
@@ -88,13 +90,15 @@ def _repo_token(owner: str, repo: str, user: dict, provider: str = "") -> str:
     - devops 事件 agent → **仓库 bot token**（仓库身份）
     - 一种缺失 → 交叉回退；均缺失 → 502。
     """
-    if provider not in _SUPPORTED_PROVIDERS:
-        raise ValueError(f"Git provider 未支持: {provider}")
+    get_module(provider)
     if user.get("auth_type") != "session_token":
         raise HTTPException(status_code=403, detail={"code": 403, "message": "Git 仓库接口仅支持会话级临时 token（agent 专用），用户 API Key / Web 会话不适用"})
     from src.repo_key import to_repo_key
-    mod = _PROVIDER_MODULES[provider]
+    mod = get_module(provider)
     rk = to_repo_key(f"{provider}:{owner}/{repo}")
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider) and user.get("repo_key") != rk:
+        raise HTTPException(status_code=403, detail="GitLab repository does not match session scope")
 
     def _bot():
         try:
@@ -133,10 +137,12 @@ def _repo_token(owner: str, repo: str, user: dict, provider: str = "") -> str:
 def _vcs_url(owner: str, repo: str, subpath: str, params: dict | None = None,
                provider: str = "") -> str:
     """拼 provider 原生 URL。无默认 provider（空串）→ fail-fast，不静默 gitcode。"""
-    if provider not in _SUPPORTED_PROVIDERS:
-        raise ValueError(f"Git provider 未支持: {provider}")
+    get_module(provider)
     import urllib.parse
-    api_base = _PROVIDER_MODULES[provider].API_BASE
+    mod = get_module(provider)
+    if hasattr(mod, "url"):
+        return mod.url(owner, repo, subpath, params)
+    api_base = mod.API_BASE
     base = f"{api_base}/repos/{urllib.parse.quote(owner, safe='')}/{urllib.parse.quote(repo, safe='')}"
     url = base + subpath
     if params:
@@ -149,7 +155,7 @@ def _vcs_url(owner: str, repo: str, subpath: str, params: dict | None = None,
 def _vcs_req(provider: str, method: str, url: str, token: str, body: dict | None = None):
     """按 provider 注册表分发原生 API 调用（新增 provider=加模块）。"""
     try:
-        return _PROVIDER_MODULES[provider].request(method, url, token, body)
+        return get_module(provider).request(method, url, token, body)
     except HTTPException:
         raise
     except Exception as e:
@@ -202,6 +208,9 @@ def get_repo_tree(owner: str, repo: str, ref: str = Query("", description="分�
         return _vcs_req(p, "GET", _vcs_url(owner, repo, f"/git/trees/{ref}", None, p),
                         _repo_token(owner, repo, user, p))
     # 递归
+    if p.startswith("gitlab"):
+        _gitlab_ref = ref or "HEAD"
+        return _vcs_req(p, "GET", _vcs_url(owner, repo, f"/git/trees/{_gitlab_ref}", {"recursive": "true", "per_page": 100}, p), _repo_token(owner, repo, user, p))
     if p != "github":
         raise HTTPException(status_code=400, detail={"code": 400,
             "message": "该平台（GitCode）暂不支持递归树：recursive 返回破碎树（丢失 blob），请用单层或 Git 仓库等效接口"})
@@ -216,7 +225,7 @@ def get_repo_tree(owner: str, repo: str, ref: str = Query("", description="分�
 def _default_ref(p: str, owner: str, repo: str, user: dict) -> str:
     """解析默认分支（ref 空时）：GitCode 用 branches[0]，GitHub 用 default_branch 或 branches[0]。"""
     try:
-        if p == "github":
+        if p == "github" or p.startswith("gitlab"):
             data = _vcs_req(p, "GET", _vcs_url(owner, repo, "", None, p), _repo_token(owner, repo, user, p))
             if isinstance(data, dict) and data.get("default_branch"):
                 return data["default_branch"]
@@ -525,3 +534,15 @@ def list_pull_files(owner: str, repo: str, number: int, user: dict = Depends(get
                     p: str = Depends(_provider)):
     return _vcs_req(p, "GET", _vcs_url(owner, repo, f"/pulls/{number}/files", None, p),
                     _repo_token(owner, repo, user, p))
+
+# Register namespace-aware routes after the established two-segment routes.
+# More specific operations precede the catch-all repository metadata route.
+_namespace_routes = sorted(list(router.routes), key=lambda r: len(r.path), reverse=True)
+for _route in _namespace_routes:
+    if _route.path.startswith('/api/git-repo/{owner}/{repo}'):
+        _relative = _route.path[len('/api/git-repo'):]
+        for _separator, _suffix in [('', '_namespace'), ('/-', '_separated_namespace')]:
+            _path = _relative.replace('/{owner}/{repo}', '/{owner:path}/{repo}' + _separator, 1)
+            router.add_api_route(_path, _route.endpoint, methods=list(_route.methods),
+                                 operation_id=(_route.operation_id or _route.name) + _suffix,
+                                 summary=_route.summary)

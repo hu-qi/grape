@@ -10,6 +10,7 @@ import re
 import urllib.request
 import urllib.error
 from src.config import log
+from src.vcs.gitlab_config import is_gitlab
 
 
 # Issue #315: GitCode 编辑器上传图片（raw.gitcode.com/user-images/...）链接识别与鉴权下载。
@@ -129,8 +130,9 @@ class VcsApiClient:
             _resp = self._github_request(
                 "POST", f"/repos/{self.owner}/{self.repo}/issues/{issue_number}/comments",
                 {"body": body})
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             _resp = self._gitlab_request(
                 "POST", f"/projects/{project_id}/issues/{issue_number}/notes",
                 {"body": body})
@@ -153,8 +155,9 @@ class VcsApiClient:
         elif self.provider == "github":
             return self._github_request(
                 "GET", f"/repos/{self.owner}/{self.repo}/issues/{issue_number}")
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             return self._gitlab_request(
                 "GET", f"/projects/{project_id}/issues/{issue_number}")
         return {"error": f"unsupported provider: {self.provider}"}
@@ -182,8 +185,9 @@ class VcsApiClient:
             _resp = self._github_request(
                 "PATCH", f"/repos/{self.owner}/{self.repo}/issues/{issue_number}",
                 {"state": "closed"})
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             _resp = self._gitlab_request(
                 "PUT", f"/projects/{project_id}/issues/{issue_number}",
                 {"state_event": "close"})
@@ -212,10 +216,12 @@ class VcsApiClient:
         elif self.provider == "github":
             _resp = self._github_request(
                 "POST", f"/repos/{self.owner}/{self.repo}/pulls", data)
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             _resp = self._gitlab_request(
-                "POST", f"/projects/{project_id}/merge_requests", data)
+                "POST", f"/projects/{project_id}/merge_requests",
+                {"title": title, "source_branch": head, "target_branch": base, "description": body})
         else:
             return {"error": f"unsupported provider: {self.provider}"}
         # Issue #453 台账（写点11）：建 PR 入账——PR 编号（number/iid）为对账键
@@ -232,8 +238,9 @@ class VcsApiClient:
         elif self.provider == "github":
             _resp = self._github_request(
                 "PUT", f"/repos/{self.owner}/{self.repo}/pulls/{pr_number}/merge", {})
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             _resp = self._gitlab_request(
                 "PUT", f"/projects/{project_id}/merge_requests/{pr_number}/merge", {})
         else:
@@ -251,8 +258,9 @@ class VcsApiClient:
         elif self.provider == "github":
             return self._github_request(
                 "GET", f"/repos/{self.owner}/{self.repo}/pulls/{pr_number}")
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             return self._gitlab_request(
                 "GET", f"/projects/{project_id}/merge_requests/{pr_number}")
         return {"error": f"unsupported provider: {self.provider}"}
@@ -265,8 +273,9 @@ class VcsApiClient:
             return self._gitcode_request("GET", f"/repos/{self.owner}/{self.repo}")
         elif self.provider == "github":
             return self._github_request("GET", f"/repos/{self.owner}/{self.repo}")
-        elif self.provider == "gitlab":
-            project_id = f"{self.owner}%2F{self.repo}"
+        elif is_gitlab(self.provider):
+            from urllib.parse import quote
+            project_id = quote(f"{self.owner}/{self.repo}", safe="")
             return self._gitlab_request("GET", f"/projects/{project_id}")
         return {"error": f"unsupported provider: {self.provider}"}
 
@@ -277,6 +286,8 @@ class VcsApiClient:
         交由探活轮询/webhook 双通道兜底）。
         """
         info = self.get_repo_info()
+        if is_gitlab(self.provider) and isinstance(info, dict) and '(404)' in str(info.get('error', '')):
+            return False
         if isinstance(info, dict) and str(info.get("error", "")).strip() == "HTTP 404":
             return False
         return True
@@ -313,11 +324,12 @@ class VcsApiClient:
         })
 
     def _gitlab_request(self, method: str, path: str, data: dict | None = None) -> dict:
-        url = f"https://gitlab.com/api/v4{path}"
-        return self._do_request(url, method, data, headers={
-            "PRIVATE-TOKEN": self.token,
-            "Content-Type": "application/json",
-        })
+        from src.vcs.gitlab_http import request
+        from src.vcs.providers.gitlab import normalize_response
+        try:
+            return normalize_response(request(self.provider, method, path, self.token, data))
+        except (RuntimeError, ValueError) as exc:
+            return {"error": str(exc)}
 
     @staticmethod
     def _do_request(url: str, method: str, data: dict | None = None, headers: dict | None = None) -> dict:
@@ -362,8 +374,8 @@ def create_client(repo_key: str, token: str = "") -> "VcsApiClient":
     if not token:
         # 从 DB 获取 token
         try:
-            from src.user.db import get_gitcode_token
-            token = get_gitcode_token(repo_key=repo_key) or ""
+            from src.token_service import get_repo_bot_token
+            token = get_repo_bot_token(repo_key) or ""
         except Exception:
             pass
     return VcsApiClient(provider, token, owner, repo)

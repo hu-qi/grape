@@ -601,6 +601,7 @@ CREATE TABLE IF NOT EXISTS managed_repos (
     webhook_id INTEGER DEFAULT 0,
     dev_scene TEXT DEFAULT '',      -- 开发场景（仓库已应用场景时写入 scene_id；默认置空=未配置，issue-39 方案 B）
     host_status TEXT DEFAULT '',     -- 托管状态（方案 F：''=完整 / bot_missing / webhook_missing / partial）
+    bot_gitlab_token TEXT DEFAULT '',
     bot_gitcode_token TEXT DEFAULT '',
     gitcode_webhook_token TEXT DEFAULT '',
     bot_username TEXT DEFAULT '',
@@ -849,7 +850,7 @@ def init_db():
         db.execute(_MANAGED_REPOS_DDL)
         db.execute(_OAUTH_STATES_DDL)
         # 兼容旧列迁移（幂等）：managed_repos 新增 github 列
-        for col in ["bot_github_token", "github_webhook_token"]:
+        for col in ["bot_github_token", "github_webhook_token", "bot_gitlab_token"]:
             try:
                 db.execute(f"ALTER TABLE managed_repos ADD COLUMN {col} TEXT DEFAULT ''")
             except Exception:
@@ -1822,6 +1823,7 @@ def get_repo_bot_token_no_global(repo_key: str) -> str:
     R25.1: 跳过第 3 级 GlobalBotToken 策略，保持"no_global"语义。
     read_stored_token 契约：不检查过期、不触发 refresh、走缓存层。
     """
+
     from src.token_resolver import TokenResolver, create_provider_from_repo_key
     provider = create_provider_from_repo_key(repo_key)
     resolver = TokenResolver(provider)
@@ -1957,6 +1959,12 @@ def get_gitcode_token(repo_key: str = "", user_id: int = 0) -> str:
     - repo_key 非空 → get_repo_token_with_refresh（四级 fallback + 用户 token 降级）
     - user_id > 0 → user token（通过 get_user_gitcode_token 从 external_identities 读）
     """
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        from src.vcs.gitlab_credentials import repo_token
+        return repo_token(repo_key)
+
     if repo_key:
         return get_repo_token_with_refresh(repo_key)
     if user_id > 0:
@@ -2169,6 +2177,12 @@ def get_repo_token_with_refresh(repo_key: str) -> str:
 
     R16.4: 过期短路——标记过期的 token 短路返回空串（用户 token status=4 除外，best-effort）。
     """
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        from src.vcs.gitlab_credentials import repo_token
+        return repo_token(repo_key)
+
     from src.token_resolver import TokenResolver, create_provider_from_repo_key
     provider = create_provider_from_repo_key(repo_key)
     return TokenResolver(provider).get_token(repo_key)

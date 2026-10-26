@@ -206,6 +206,21 @@ def _repo_user_id(repo_key: str, issue_creator: str = "") -> int:
     """
     if not repo_key:
         return 0
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    provider = parse_repo_key(repo_key)[0]
+    if is_gitlab(provider):
+        from src.session_manager import db as _gdb, db_lock as _glock
+        import json
+        with _glock:
+            if issue_creator:
+                rows = _gdb.execute("SELECT user_id, config_json FROM user_credentials WHERE provider=?", (provider,)).fetchall()
+                for uid, raw in rows:
+                    if json.loads(raw or "{}").get("username", "").lower() == issue_creator.lower():
+                        return int(uid)
+                return 0
+            row = _gdb.execute("SELECT host_user_id FROM managed_repos WHERE repo_key=?", (repo_key,)).fetchone()
+            return int(row[0] or 0) if row else 0
     repo = _norm_repo(repo_key)
     db, lock = _db()
     with lock:

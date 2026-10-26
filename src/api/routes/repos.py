@@ -108,6 +108,10 @@ def _provider_from_token(user: dict) -> tuple[str, str]:
 
 def _fetch_and_cache(user_id: int, api_token: str, provider: str = "gitcode") -> list[dict]:
     """从 VCS 拉取仓库列表，返回结果（不写缓存——由调用方合并后一次性写入）"""
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider):
+        from src.vcs.gitlab_manager import fetch_repos
+        return fetch_repos(api_token, provider)
     if provider == "github":
         from src.user.repo_manager import fetch_github_repos_with_role
         repos = fetch_github_repos_with_role(api_token)
@@ -209,7 +213,9 @@ def _probe_stale_repos(api_token: str, user_id: int):
     import concurrent.futures, urllib.request, urllib.error, json as _json
     from src.repo_key import parse_repo_key
 
-    all_repos = user_db.get_managed_repos(user_id)
+    from src.vcs.gitlab_config import is_gitlab
+    all_repos = [r for r in user_db.get_managed_repos(user_id)
+                 if not is_gitlab(parse_repo_key(r["repo_key"])[0])]
     if not all_repos:
         return
 
@@ -487,11 +493,14 @@ def list_member_repos(user: dict = Depends(require_org_member), provider: str = 
     from src.auth.grape_account_db import get_user_identities
     _identities = get_user_identities(user["id"])
     _bound_providers = {i["provider"] for i in _identities if i.get("provider") in ("gitcode", "github")}
+    from src.vcs.gitlab_credentials import bound_providers
+    _bound_providers.update(bound_providers(user["id"]))
     if not _bound_providers:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置，请先通过 OAuth 登录或配置个人 Token"})
 
     # 需求 17: 前端显式指定 provider 时只拉该平台
-    if provider in ("gitcode", "github"):
+    from src.vcs.gitlab_config import is_gitlab
+    if provider in ("gitcode", "github") or is_gitlab(provider):
         if provider not in _bound_providers:
             raise HTTPException(status_code=400, detail={"code": 400, "message": f"{provider} API Token 未配置，请先绑定 {provider} 平台"})
         _providers = [provider]
@@ -528,11 +537,8 @@ def list_member_repos(user: dict = Depends(require_org_member), provider: str = 
             return True
 
     def _filter_by_provider(repos_list):
-        """按 provider 过滤缓存（repo_key 前缀匹配）"""
-        if provider in ("gitcode", "github") and len(_providers) == 1:
-            pfx = provider + ":"
-            return [r for r in repos_list if (r.get("repo_key", "").startswith(pfx) or
-                       (provider == "gitcode" and not r.get("repo_key", "").startswith("github:")))]
+        if provider and len(_providers) == 1:
+            return [r for r in repos_list if r.get("repo_key", "").startswith(provider + ":")]
         return repos_list
 
     if cached and not _is_expired():
@@ -645,6 +651,8 @@ def sync_repos(user: dict = Depends(require_org_member)):
     from src.auth.grape_account_db import get_user_identities
     _identities = get_user_identities(user["id"])
     _providers = [i["provider"] for i in _identities if i.get("provider") in ("gitcode", "github")]
+    from src.vcs.gitlab_credentials import bound_providers
+    _providers.extend(bound_providers(user["id"]))
     if not _providers:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置"})
 
@@ -710,8 +718,27 @@ def sync_repos(user: dict = Depends(require_org_member)):
 
 
 @router.get("/check-name", operation_id="repos_check_name", summary="Check repo name availability", description="Checks whether a repository with the same name already exists under the current user.")
-def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
+def check_repo_name(name: str, user: dict = Depends(require_no_session_token), provider: str = ""):
     """检查当前用户名下是否已存在同名仓库"""
+    from src.vcs.gitlab_config import is_gitlab, validate_project
+    if is_gitlab(provider):
+        from src.vcs.gitlab_credentials import user_token
+        from src.vcs.gitlab_http import request as gitlab_request, GitLabError
+        from src.vcs.gitlab_manager import project_path
+        token = user_token(user['id'], provider)
+        if not token:
+            raise HTTPException(400, 'GitLab token is not configured')
+        try:
+            login = gitlab_request(provider, 'GET', '/user', token)['username']
+            full_name = validate_project(login + '/' + name)
+            gitlab_request(provider, 'GET', project_path(full_name), token)
+            return {'exists': True, 'full_name': full_name}
+        except ValueError:
+            raise HTTPException(400, 'Invalid GitLab project name') from None
+        except GitLabError as exc:
+            if exc.status == 404:
+                return {'exists': False, 'full_name': full_name}
+            raise HTTPException(502, str(exc)) from None
     provider, api_token = _get_user_provider_and_token(user["username"], user.get("login_provider", ""), user.get("id", 0))
     if not api_token:
         raise HTTPException(status_code=400, detail={"code": 400, "message": "API Token 未配置"})
@@ -751,7 +778,7 @@ def check_repo_name(name: str, user: dict = Depends(require_no_session_token)):
 
 
 @router.post("/create", operation_id="repos_create", summary="Create repository (optionally auto-host)", description="Creates a repository via the VCS API; optionally auto-hosts it afterwards.")
-def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_session_token)):
+def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_session_token), request: Request = None):
     """通过 VCS API 新建仓库，可选创建后自动托管"""
     import re as _re
     from src.repo_key import to_repo_key
@@ -765,6 +792,34 @@ def create_new_repo(body: CreateRepoBody, user: dict = Depends(require_no_sessio
         private = (body.visibility == "private")
     else:
         private = body.private
+
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(body.provider):
+        from src.vcs.gitlab_credentials import user_token
+        from src.vcs.gitlab_manager import create_project
+        token = user_token(user['id'], body.provider)
+        if not token:
+            raise HTTPException(400, 'GitLab token is not configured')
+        try:
+            info = create_project(token, name, body.description, private, body.org,
+                                  body.auto_init, body.default_branch, body.provider)
+        except ValueError:
+            raise HTTPException(400, 'Invalid GitLab project name') from None
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc)) from None
+        full_name = info['full_name']
+        namespace, _, project_name = full_name.rpartition('/')
+        result = {'repo': info, 'full_name': full_name, 'owner': namespace, 'name': project_name,
+                  'repo_key': body.provider + ':' + full_name, 'hosted': False, 'message': 'GitLab project created'}
+        if body.host_after_create:
+            from src.api.routes.gitlab import host, ProjectBody
+            org_id = resolve_org_context(request, user['id']) if request else user.get('org_id', 0)
+            try:
+                host(ProjectBody(provider=body.provider, project=full_name), request, {**user, 'org_id': org_id})
+                result['hosted'] = True
+            except HTTPException as exc:
+                result['message'] = 'Project created; hosting requires configuration: ' + str(exc.detail)
+        return result
 
     # R26: 优先用用户指定的 provider；未指定时 fallback 到自动选择
     if body.provider:
@@ -969,6 +1024,13 @@ def host_repo(body: RepoAction, user: dict = Depends(require_no_session_token), 
     # ===== provider 判定：仓库来源优先于登录平台（host-repo-provider-routing-fix-design.md）=====
     if not provider:
         provider = _provider_from_hint(body.full_name)
+    from src.vcs.gitlab_config import is_gitlab
+    _hint = body.full_name.split(':', 1)[0] if ':' in body.full_name else ''
+    if is_gitlab(provider or _hint):
+        from src.api.routes.gitlab import host, ProjectBody
+        _provider = provider or _hint
+        project = body.full_name.split(':', 1)[-1]
+        return host(ProjectBody(provider=_provider, project=project), request, {**user, 'org_id': _org_id})
     # 剥离 provider 前缀（"github:owner/repo" / "gitcode:owner/repo"），下游统一用纯 owner/repo
     _raw = body.full_name
     if ":" in _raw and _raw.split(":", 1)[0] in ("github", "gitcode"):
@@ -1596,6 +1658,9 @@ def set_repo_bot_token(body: BotTokenBody, user: dict = Depends(require_no_sessi
 
     # 确定 provider
     _provider_str, _, _ = parse_repo_key(repo_key)
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(_provider_str):
+        raise HTTPException(400, 'Use /api/gitlab/bot-token to configure a GitLab bot')
     _is_github = (_provider_str == "github")
 
     # R15.5: 传空串时清除仓库级 bot token
@@ -1935,6 +2000,9 @@ def remove_managed_repo(body: RepoAction, user: dict = Depends(require_no_sessio
         raise HTTPException(status_code=400, detail={"code": 400, "message": "无效的仓库标识"})
     owner, repo_name = parts
 
+    from src.vcs.gitlab_config import is_gitlab
+    if ':' in body.full_name and is_gitlab(body.full_name.split(':', 1)[0]):
+        raise HTTPException(400, 'Use /api/gitlab/remove to remove GitLab hosting')
     # 按 provider 分流：前端传的 full_name 不含前缀
     # 先尝试 gitcode:（默认），不存在再尝试 github:
     from src.repo_key import to_repo_key as _rk
@@ -2156,7 +2224,10 @@ def _repo_provider(user: dict = Depends(get_current_user_or_api_key)) -> str:
     """Git provider（gitcode/github）：由认证 token 的 repo_key 前缀派生（见 git-repo-provider-from-token-design.md）。"""
     from src.repo_key import parse_repo_key
     p = parse_repo_key(user.get("repo_key") or "")[0] or "gitcode"
-    if p not in _SUPPORTED_PROVIDERS:
+    from src.vcs.providers import get_module
+    try:
+        get_module(p)
+    except ValueError:
         raise HTTPException(status_code=403, detail={"code": 403, "message": f"Git provider 未接入: {p}"})
     return p
 
@@ -2169,6 +2240,10 @@ def _repo_platform_token(owner: str, repo: str, user: dict, provider: str = "git
     if user.get("auth_type") != "session_token":
         raise HTTPException(status_code=403, detail={"code": 403, "message": "Git 仓库接口仅支持会话级临时 token（agent 专用），用户 API Key / Web 会话不适用"})
     from src.repo_key import to_repo_key
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider):
+        from src.api.git_repo_api import _repo_token
+        return _repo_token(owner, repo, user, provider)
 
     if provider == "github":
         rk = to_repo_key(f"github:{owner}/{repo}")
@@ -2233,12 +2308,13 @@ def get_repo_git_credential(owner: str, repo: str, user: dict = Depends(get_curr
     gitcode：Basic 用 username=`x-access-token`、password=配置的 gitcode token。
     """
     token = _repo_platform_token(owner, repo, user, p)
-    _gh = "github.com" if p == "github" else "gitcode.com"
+    from src.repo import Repo
+    clone_url = Repo(f"{p}:{owner}/{repo}").clone_url
     return {
         "provider": p,
         "username": "x-access-token",
         "password": token,
-        "clone_url": f"https://{_gh}/{owner}/{repo}.git",
+        "clone_url": clone_url,
         "expires_in": _CREDENTIAL_TTL,
     }
 
@@ -2246,6 +2322,18 @@ def get_repo_git_credential(owner: str, repo: str, user: dict = Depends(get_curr
 @router.get("/{owner}/{repo}/workspace", operation_id="repos_workspace", summary="Repository workspace path (local git via CLI)", description="Returns the grape-managed local workspace path for the repository (CLI local git on the server). Session-only.")
 def get_repo_workspace(owner: str, repo: str, user: dict = Depends(get_current_user_or_api_key),
                        p: str = Depends(_repo_provider)):
+    from src.repo import Repo
+    from src.repo_key import workspace_repo_dir
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(p):
+        _repo_platform_token(owner, repo, user, p)  # Session and repository scope check.
+        return {"workspace": workspace_repo_dir(f"{p}:{owner}/{repo}"),
+                "clone_url": Repo(f"{p}:{owner}/{repo}").clone_url}
     ws = os.path.join(WORKSPACE_DIR, owner, repo)
     _gh = "github.com" if p == "github" else "gitcode.com"
     return {"workspace": ws, "clone_url": f"https://{_gh}/{owner}/{repo}.git"}
+
+
+for _endpoint, _name in [(get_repo_git_credential, 'git-credential'), (get_repo_workspace, 'workspace')]:
+    router.add_api_route('/{owner:path}/{repo}/' + _name, _endpoint, methods=['GET'],
+                         operation_id='repos_' + _name.replace('-', '_') + '_namespace')

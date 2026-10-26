@@ -11,6 +11,9 @@ from .event_types import (
 
 
 class GitLabBackend(VcsBackend):
+    def __init__(self, provider="gitlab"):
+        self.provider = provider
+
     name = "gitlab"
     webhook_path = "/webhook/gitlab"
     event_header_key = "X-Gitlab-Event"
@@ -33,8 +36,40 @@ class GitLabBackend(VcsBackend):
         branch = self._extract_branch(payload)
         title = obj.get("title", "") if isinstance(obj, dict) else ""
 
+        from src.vcs.providers.gitlab import normalize_response
+        for key in ("user", "assignee", "assignees"):
+            if key in payload:
+                payload[key] = normalize_response(payload[key])
         payload["_raw_action"] = action
         payload["_changes"] = changes
+
+        # Keep native fields, and expose the neutral fields consumed by task prompts,
+        # issue persistence and self-loop detection.
+        if isinstance(obj, dict):
+            neutral = dict(obj)
+            neutral["number"] = obj.get("iid", obj.get("id"))
+            neutral["body"] = obj.get("description", "")
+            neutral["html_url"] = obj.get("url", "")
+            neutral["user"] = payload.get("user", {})
+            if object_kind == "issue":
+                payload["issue"] = neutral
+            elif object_kind == "merge_request":
+                neutral["head"] = {"ref": obj.get("source_branch", "")}
+                neutral["base"] = {"ref": obj.get("target_branch", "")}
+                neutral["merged"] = obj.get("state") == "merged" or action == "merge"
+                payload["pull_request"] = neutral
+            elif object_kind == "note":
+                payload["comment"] = {"id": obj.get("id"), "body": obj.get("note", ""),
+                                      "user": payload.get("user", {}), "html_url": obj.get("url", "")}
+        for key in ("issue", "merge_request"):
+            if isinstance(payload.get(key), dict):
+                value = payload[key]
+                value.setdefault("number", value.get("iid"))
+                value.setdefault("body", value.get("description", ""))
+        if object_kind == "note" and isinstance(payload.get("merge_request"), dict):
+            mr = payload["merge_request"]
+            payload["pull_request"] = {**mr, "head": {"ref": mr.get("source_branch", "")},
+                                       "base": {"ref": mr.get("target_branch", "")}}
 
         return {
             "source": "gitlab",
@@ -64,7 +99,9 @@ class GitLabBackend(VcsBackend):
         if object_kind == "note":
             obj = payload.get("object_attributes", {})
             noteable_type = obj.get("noteable_type", "") if isinstance(obj, dict) else ""
-            return PR_COMMENT if noteable_type == "MergeRequest" else ISSUE_COMMENT
+            if noteable_type == "MergeRequest":
+                return PR_COMMENT
+            return ISSUE_COMMENT if noteable_type == "Issue" else "note"
 
         # Merge request events
         if object_kind == "merge_request":
@@ -107,7 +144,11 @@ class GitLabBackend(VcsBackend):
         ref = payload.get("ref", "")
         if isinstance(ref, str) and ref.startswith("refs/heads/"):
             return ref[11:]
+        obj = payload.get("object_attributes") or {}
+        if payload.get("object_kind") == "merge_request":
+            return obj.get("source_branch", "")
         return ""
 
     def get_collaborators_url(self, owner: str, repo: str) -> str:
-        return f"https://gitlab.com/api/v4/projects/{owner}%2F{repo}/members"
+        from src.vcs.gitlab_config import get_instance
+        return get_instance(self.provider).project_url(f"{owner}/{repo}") + "/members/all"

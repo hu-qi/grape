@@ -30,6 +30,12 @@ def parse_repo_key(repo_key: str) -> tuple[str, str, str]:
     provider, _, owner_repo = repo_key.partition(":")
     if not owner_repo:
         provider, owner_repo = "gitcode", repo_key
+    from src.vcs.gitlab_config import is_gitlab, instance_name, validate_project
+    if is_gitlab(provider):
+        instance_name(provider)
+        validate_project(owner_repo)
+        owner, _, repo = owner_repo.rpartition("/")
+        return provider, owner, repo
     owner, _, repo = owner_repo.partition("/")
     return provider or "gitcode", owner, repo
 
@@ -38,6 +44,10 @@ def split_owner_repo(owner_repo: str) -> tuple[str, str]:
     """owner/repo（或 gitcode:owner/repo）→ (owner, repo)，兼容带/不带前缀。"""
     if not owner_repo:
         return "", ""
+    from src.vcs.gitlab_config import is_gitlab
+    if ":" in owner_repo and is_gitlab(owner_repo.split(":", 1)[0]):
+        _, owner, repo = parse_repo_key(owner_repo)
+        return owner, repo
     if ":" in owner_repo:
         owner_repo = owner_repo.split(":", 1)[-1]
     owner, _, repo = owner_repo.partition("/")

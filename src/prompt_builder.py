@@ -22,21 +22,34 @@ def _is_github_repo(repo_key: str) -> bool:
 
 def _vcs_api_base(repo_key: str) -> str:
     """返回 VCS API 基础 URL。"""
-    return "https://api.github.com" if _is_github_repo(repo_key) else "https://gitcode.com/api/v5"
+    from src.repo import Repo
+    return Repo(repo_key).api_base
 
 
 def _vcs_token_env(repo_key: str) -> str:
     """返回 VCS token 环境变量名。"""
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        return "USER_GITLAB_TOKEN"
     return "USER_GITHUB_TOKEN" if _is_github_repo(repo_key) else "USER_GITCODE_TOKEN"
 
 
 def _vcs_bot_token_env(repo_key: str) -> str:
     """返回 VCS bot token 环境变量名。"""
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        return "BOT_GITLAB_TOKEN"
     return "BOT_GITHUB_TOKEN" if _is_github_repo(repo_key) else "BOT_GITCODE_TOKEN"
 
 
 def _vcs_name(repo_key: str) -> str:
     """返回 VCS 平台名称。"""
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if is_gitlab(parse_repo_key(repo_key)[0]):
+        return "GitLab"
     return "GitHub" if _is_github_repo(repo_key) else "GitCode"
 
 

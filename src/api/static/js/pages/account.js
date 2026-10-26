@@ -10,7 +10,7 @@ function renderAccount(tab) {
   // hash 路由：从 location.hash 恢复 tab（如 /#account#security）
   if (!tab && location.hash && location.hash !== '#account') {
     var hashTab = location.hash.replace('#account', '').replace('#', '');
-    if (['profile', 'security', 'credentials', 'appearance', 'apikeys'].indexOf(hashTab) >= 0) {
+    if (['profile', 'security', 'credentials', 'appearance', 'apikeys', 'gitlab'].indexOf(hashTab) >= 0) {
       tab = hashTab;
     }
   }
@@ -24,6 +24,7 @@ function renderAccount(tab) {
     {id:'credentials', label: (I18N.t('app.account.credentials_tab'))},
     {id:'appearance', label: (I18N.t('app.account.appearance_tab'))},
     {id:'apikeys', label: 'API Keys'},
+    {id:'gitlab', label: 'GitLab'},
   ];
 
   // 布局：cd 容器 + stabs tab 栏 + 内容（和 renderSettings 一致）
@@ -42,6 +43,7 @@ function renderAccount(tab) {
     case 'profile': _accountLoadProfile(); break;
     case 'security': _accountLoadSecurity(); break;
     case 'credentials': _accountLoadCredentials(); break;
+    case 'gitlab': renderGitLabConnections(); break;
     case 'appearance': _accountLoadAppearance(); break;
     case 'apikeys': _accountLoadApiKeys(); break;
   }

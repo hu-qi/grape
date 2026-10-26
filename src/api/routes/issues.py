@@ -502,6 +502,20 @@ def _close_vcs_issues(repo_key: str, issue_number, user: dict) -> dict:
     except (TypeError, ValueError):
         return result
 
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    provider = parse_repo_key(repo_key)[0]
+    if is_gitlab(provider):
+        from src.vcs.api_client import create_client
+        from src.vcs.gitlab_credentials import repo_token, user_token
+        token = user_token(user.get('id', 0), provider) or repo_token(repo_key)
+        if not token:
+            result['gitlab'] = 'skipped'
+        else:
+            response = create_client(repo_key, token).close_issue(issue_number)
+            result['gitlab'] = 'failed' if response.get('error') else 'success'
+        return result
+
     is_github = repo_key.startswith("github:")
 
     # --- 确定 GitCode 侧的 repo_key 与 issue（GitHub 仓库时 GitCode 侧 skip）---

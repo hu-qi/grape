@@ -951,9 +951,26 @@ async def api_ping():
     """
     return {"ok": True, "ts": _dt.now(_tz.utc).isoformat()}
 
+# Namespace-aware aliases preserve multi-level GitLab groups in repository-scoped views.
+# Register after the established routes; keep repository metadata catch-alls last.
+for _router in (repos.router, dashboard.router, agents.router, events.router, pipeline.router,
+                scenes.router, tasks.router, issues.router, knowledge.router, settings.router):
+    _existing_paths = {(r.path, tuple(sorted(r.methods or []))) for r in _router.routes}
+    for _route in sorted(list(_router.routes), key=lambda r: len(r.path), reverse=True):
+        if '/{owner}/' not in _route.path or not any(x in _route.path for x in ('/{repo}', '/{repo_name}')):
+            continue
+        _alias = _route.path.replace('/{owner}/', '/{owner:path}/', 1)
+        if (_alias, tuple(sorted(_route.methods or []))) in _existing_paths:
+            continue
+        _router.add_api_route(_alias[len(_router.prefix):], _route.endpoint,
+                              methods=list(_route.methods), operation_id=(_route.operation_id or _route.name) + '_gitlab_namespace',
+                              summary=_route.summary)
+
 app.include_router(grape_auth.router)
 app.include_router(auth.router)
 app.include_router(repos.router)
+from src.api.routes import gitlab as gitlab_routes
+app.include_router(gitlab_routes.router)
 # Admin 管理后台（/api/admin/*）
 from src.admin.routes import router as admin_router
 app.include_router(admin_router)
