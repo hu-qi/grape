@@ -1,5 +1,6 @@
 """Connect and host public/private GitLab projects using an existing Grape account."""
 import secrets
+import time
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -123,28 +124,39 @@ def _check_host_owner(user, repo_key):
 
 
 def _reserve_host(user, repo_key, project):
-    """Reserve ownership before external writes so concurrent accounts cannot take over."""
+    """Keep in-flight reservations separate from successfully hosted repositories."""
     from src.session_manager import db, db_lock
-    owner, _, name = project.rpartition('/')
     with db_lock:
         existing = _check_host_owner(user, repo_key)
-        if not existing:
-            try:
-                db.execute('INSERT INTO managed_repos (repo_key,repo_owner,repo_name,full_name,host_user_id,org_id,webhook_secret) VALUES (?,?,?,?,?,?,?)',
-                           (repo_key, owner, name, project, user['id'], user.get('org_id', 0), secrets.token_urlsafe(32)))
-                db.commit()
-            except Exception:
-                db.rollback()
-                # A concurrent process may have inserted the same primary key.
-                if not _check_host_owner(user, repo_key):
-                    raise HTTPException(500, 'Cannot reserve GitLab hosting') from None
-        row = db.execute('SELECT webhook_secret FROM managed_repos WHERE repo_key=?', (repo_key,)).fetchone()
-        secret = row[0] if row else ''
-        if not secret:
-            secret = secrets.token_urlsafe(32)
-            db.execute('UPDATE managed_repos SET webhook_secret=? WHERE repo_key=?', (secret, repo_key))
+        db.execute('CREATE TABLE IF NOT EXISTS gitlab_host_reservations ('
+                   'repo_key VARCHAR(512) PRIMARY KEY, user_id INTEGER NOT NULL, '
+                   'org_id INTEGER NOT NULL, secret VARCHAR(128) NOT NULL, expires_at DOUBLE NOT NULL)')
+        db.execute('DELETE FROM gitlab_host_reservations WHERE expires_at<?', (time.time(),))
+        row = db.execute('SELECT user_id, org_id, secret FROM gitlab_host_reservations WHERE repo_key=?', (repo_key,)).fetchone()
+        if row:
+            if int(row[0]) != user['id'] or int(row[1]) != int(user.get('org_id', 0)):
+                raise HTTPException(403, 'Repository hosting is reserved by another account or organization')
+            raise HTTPException(409, 'GitLab hosting is already in progress; retry shortly')
+        secret = ''
+        if existing:
+            row = db.execute('SELECT webhook_secret FROM managed_repos WHERE repo_key=?', (repo_key,)).fetchone()
+            secret = row[0] if row else ''
+        secret = secret or secrets.token_urlsafe(32)
+        try:
+            db.execute('INSERT INTO gitlab_host_reservations (repo_key,user_id,org_id,secret,expires_at) VALUES (?,?,?,?,?)',
+                       (repo_key, user['id'], user.get('org_id', 0), secret, time.time() + 300))
             db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(409, 'Concurrent GitLab hosting; retry shortly') from None
         return secret
+
+
+def _release_host_reservation(repo_key, secret):
+    from src.session_manager import db, db_lock
+    with db_lock:
+        db.execute('DELETE FROM gitlab_host_reservations WHERE repo_key=? AND secret=?', (repo_key, secret))
+        db.commit()
 
 
 @router.post('/host')
@@ -168,13 +180,16 @@ def host(body: ProjectBody, request: Request, user: dict = Depends(require_gitla
     from src.vcs.gitlab_config import instance_name
     hook_url = base + '/webhook/gitlab/' + instance_name(body.provider)
     try:
-        hook_id = setup_webhook(token, body.project, hook_url, secret, body.provider)
-    except RuntimeError:
-        raise HTTPException(502, 'Cannot configure GitLab webhook') from None
-    owner, _, name = body.project.rpartition('/')
-    if not add_managed_repo(repo_key, owner, name, webhook_id=hook_id, host_user_id=user['id'],
-                            webhook_secret=secret, org_id=user.get('org_id', 0)):
-        raise HTTPException(500, 'Webhook configured but local save failed; retry hosting to reconcile')
+        try:
+            hook_id = setup_webhook(token, body.project, hook_url, secret, body.provider)
+        except RuntimeError:
+            raise HTTPException(502, 'Cannot configure GitLab webhook; retry hosting') from None
+        owner, _, name = body.project.rpartition('/')
+        if not add_managed_repo(repo_key, owner, name, webhook_id=hook_id, host_user_id=user['id'],
+                                webhook_secret=secret, org_id=user.get('org_id', 0)):
+            raise HTTPException(500, 'Webhook configured but local save failed; retry hosting to reconcile')
+    finally:
+        _release_host_reservation(repo_key, secret)
     sync_host_vcs_username(repo_key, identity.get('username', ''))
     mark_user_repo_join(user['id'], repo_key, True, True)
     return {'status': 'ok', 'repo_key': repo_key, 'webhook_id': hook_id}

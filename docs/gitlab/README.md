@@ -27,7 +27,7 @@ export GRAPE_GITLAB_INSTANCES='{"corp":{"url":"https://gitlab.example.com","ca_b
 1. 重启 Grape 服务，打开 **个人设置 → GitLab**（未绑定平台的新手引导和项目页也提供 GitLab 入口）。
 2. 选择 GitLab.com 或管理员配置的私有地址，输入 PAT，点击“验证并绑定”。成功后输入框清空；前端不缓存 Token。
 3. 点击“加载项目”。成员项目分页查询；项目/组继承权限达到 Maintainer（40）时可托管。
-4. 配置 Grape 的 `server_base_url` 为 GitLab 实例能够访问的 HTTPS 服务地址，再点击“托管”。Grape 创建或更新自己的 Webhook，不改动其他 Hook。
+4. 配置 Grape 的 `server_base_url` 为 GitLab 实例能够访问的 HTTPS 服务地址，再点击“托管”。Grape 创建或更新自己的 Webhook，不改动其他 Hook。配置期间仅预留托管权限；远端设置成功后才保存托管记录。配置失败可重试，已有托管关系保留。
 5. 进入项目后使用现有场景、任务和 Agent。项目设置中可更新该仓库的 Bot Token，或解除托管。
 
 PAT 需要 `api`；HTTPS Git 操作需要仓库读写权限。令牌 scope 不等同于具体项目权限：创建项目还受实例/命名空间策略限制，保护分支和 MR 审批规则仍由 GitLab 执行。PAT 过期后在同一连接中重新绑定，不会自动续期。
@@ -84,7 +84,7 @@ GitLab.com:  https://grape.example.com/webhook/gitlab/default
 兼容入口:   https://grape.example.com/webhook/gitlab
 ```
 
-托管操作自动配置 Issue、MR、Note、Push、Tag、Pipeline、Release 事件。接收端核对项目实例地址和独立随机 `X-Gitlab-Token`，用常量时间比较验证密钥，按实例与 `X-Gitlab-Event-UUID` 拦截重复投递。派发抛异常时释放去重记录以便重试；正常返回的投递 ID 保留 24 小时，业务过滤或失败状态通过 Grape 事件管理处理。内部触发标记不会接受来自外部 payload 的注入。
+托管操作自动配置 Issue、MR、Note、Push、Tag、Pipeline、Release 事件。接收端核对项目实例地址和独立随机 `X-Gitlab-Token`，用常量时间比较验证密钥，按实例、项目与 `X-Gitlab-Event-UUID` 拦截重复投递。验证后的事件先写入持久化收件表，再返回成功；存储失败返回 503。后台领取带 60 秒租约的事件，每 10 秒续期，进程退出后可回收过期租约。派发异常按退避策略最多尝试三次；耗尽后保留 failed 状态，可在 GitLab 手动重发同一投递重新排队。正常返回的投递 ID 保留 24 小时，业务过滤或失败状态通过 Grape 事件管理处理。投递语义为至少一次：崩溃发生在业务处理成功与收件表确认之间时可能重复执行，业务层仍需保持幂等。收件表不保存认证请求头。内部触发标记不会接受来自外部 payload 的注入。
 
 不能以“API 可以访问”推断 Hook 可回调：GitLab → Grape 和 Grape/worker → GitLab 两个方向都需要实际连通。内网 GitLab 不要求公网暴露，可使用它能访问的内网 HTTPS Grape 地址。
 
@@ -112,3 +112,5 @@ unset GITLAB_TOKEN CORP_GITLAB_TOKEN
 完整的 GitLab → 已部署 Grape → 真实 Agent → MR 流程需要可达的部署地址、场景和引擎，不能用适配器测试代替。
 
 参考：[GitLab REST API](https://docs.gitlab.com/api/rest/)、[MR API](https://docs.gitlab.com/api/merge_requests/)、[Project Webhooks](https://docs.gitlab.com/api/project_webhooks/)。
+
+专项 CI 为 `.github/workflows/gitlab-integration.yml`，在 PR 上运行隔离的 Python 回归、JS 行为测试及语法检查，无需真实 Token。排查投递可检查 `gitlab_webhook_inbox` 的 `status/attempts/updated_at`；`done` 仅表示派发函数正常返回，不代表 Agent 任务成功。失败记录和待处理事件不会按成功投递的 24 小时规则删除。未携带事件 UUID 的投递会生成独立 ID，无法跨请求去重。

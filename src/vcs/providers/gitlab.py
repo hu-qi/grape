@@ -133,8 +133,8 @@ class Adapter:
                 raise
             from urllib.parse import unquote
             base, file_path = split.path.split('/repository/files/', 1)
-            data = api_request(self.provider, 'GET', base + '/repository/tree', token,
-                               params={'path': unquote(file_path), 'ref': params['ref']})
+            path = base + '/repository/tree?' + urlencode({'path': unquote(file_path), 'ref': params['ref']})
+            data = api_request(self.provider, 'GET', path, token)
         if method == 'GET' and '/repository/tree' in path and isinstance(data, list):
             # Directory/tree callers need the complete listing, not a truncated first page.
             parts = urlsplit(path)

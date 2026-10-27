@@ -665,7 +665,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning(f"Autopilot scheduler start failed: {e}")
 
-    yield
+    from src.vcs.gitlab_inbox import get_inbox, run_worker
+    get_inbox()  # Fail startup if durable acceptance cannot be initialized.
+    _gitlab_inbox_task = asyncio.create_task(run_worker())
+
+    try:
+        yield
+    finally:
+        _gitlab_inbox_task.cancel()
+        await asyncio.gather(_gitlab_inbox_task, return_exceptions=True)
 
     log.info("IM WS: stopping...")
     # 问题 H：先 cancel lease_sweep_task（不再抢新锁）→ 再 stop bot_manager（停 bot + 释放 lease）

@@ -122,6 +122,8 @@ def api_client(instances):
     from src.session_manager import db, db_lock
     with db_lock:
         db.execute('DELETE FROM managed_repos WHERE repo_key LIKE ?', ('gitlab%:group/%',))
+        db.execute('CREATE TABLE IF NOT EXISTS gitlab_host_reservations (repo_key VARCHAR(512) PRIMARY KEY, user_id INTEGER NOT NULL, org_id INTEGER NOT NULL, secret VARCHAR(128) NOT NULL, expires_at DOUBLE NOT NULL)')
+        db.execute('DELETE FROM gitlab_host_reservations WHERE user_id=?', (98001,))
         db.execute('DELETE FROM user_credentials WHERE user_id=?', (98001,))
         db.execute('DELETE FROM user_repos WHERE user_id=?', (98001,))
         db.commit()
@@ -232,18 +234,9 @@ def test_gitlab_webhook_auth_and_instance_isolation(api_client):
     assert client.post('/webhook/gitlab/corp', json=payload).status_code == 401
     assert client.post('/webhook/gitlab/corp', json=payload, headers={'X-Gitlab-Token': 'wrong'}).status_code == 403
     assert client.post('/webhook/gitlab/default', json=payload, headers={'X-Gitlab-Token': 'webhook-test-secret'}).status_code == 400
-    with patch('src.api.routes.webhook._run_gitlab_delivery') as run:
+    with patch('src.vcs.gitlab_inbox.Inbox.enqueue', return_value=True) as run:
         response = client.post('/webhook/gitlab/corp', json=payload, headers={'X-Gitlab-Token': 'webhook-test-secret', 'X-Gitlab-Event': 'Issue Hook'})
     assert response.status_code == 200
-
-
-def test_webhook_delivery_dedup_is_instance_scoped(instances):
-    import uuid
-    from src.api.routes.webhook import _claim_gitlab_delivery
-    delivery = str(uuid.uuid4())
-    assert _claim_gitlab_delivery('gitlab', delivery) is True
-    assert _claim_gitlab_delivery('gitlab', delivery) is False
-    assert _claim_gitlab_delivery('gitlab@corp', delivery) is True
 
 
 def test_private_git_credential_scope_and_url(api_client):
@@ -431,12 +424,15 @@ def test_remote_task_keeps_its_scoped_gitlab_transport_token(instances):
     assert get_task_token({'repo_key': 'gitlab@corp:g/p', 'repo_gitcode_token': 'scoped-worker-token'}) == 'scoped-worker-token'
 
 
-def test_host_reservation_preserves_owner_and_secret(api_client):
+def test_host_reservation_rejects_concurrent_requests(api_client):
     from src.api.routes.gitlab import _reserve_host
     from fastapi import HTTPException
     _, user = api_client
     secret = _reserve_host(user, user['repo_key'], 'group/subgroup/project')
-    assert _reserve_host(user, user['repo_key'], 'group/subgroup/project') == secret
+    assert secret
+    with pytest.raises(HTTPException) as busy:
+        _reserve_host(user, user['repo_key'], 'group/subgroup/project')
+    assert busy.value.status_code == 409
     with pytest.raises(HTTPException) as caught:
         _reserve_host({**user, 'id': user['id'] + 1}, user['repo_key'], 'group/subgroup/project')
     assert caught.value.status_code == 403
@@ -457,3 +453,61 @@ def test_notes_on_commits_do_not_start_issue_tasks():
     payload = {'object_kind': 'note', 'project': {'path_with_namespace': 'g/p'},
                'object_attributes': {'noteable_type': 'Commit', 'note': 'test'}}
     assert GitLabBackend().normalize(json.dumps(payload).encode(), 'Note Hook')['type'] == 'note'
+
+
+def test_contents_subdirectory_fallback_fetches_all_pages():
+    from src.vcs.providers.gitlab import Adapter
+    from src.vcs.gitlab_http import GitLabError
+    adapter = Adapter()
+    first = [{'name': str(i), 'type': 'blob'} for i in range(20)]
+    with patch('src.vcs.providers.gitlab.api_request', side_effect=[GitLabError(404), first, [{'name': 'last'}]]) as send:
+        result = adapter.request('GET', adapter.url('group', 'project', '/contents/src', {'ref': 'feature/a'}), 'test')
+    assert len(result) == 21
+    assert send.call_args.kwargs['params'] == {'path': 'src', 'ref': 'feature/a', 'page': 2}
+
+
+def test_failed_host_setup_does_not_leave_managed_repo(api_client, monkeypatch):
+    from src.api.routes import gitlab
+    from src.session_manager import db
+    client, user = api_client
+    user['auth_type'] = 'jwt'
+    monkeypatch.setattr(gitlab, '_token', lambda *a: 'test')
+    monkeypatch.setattr('src.user.db.get_meta_value', lambda *a: 'https://grape.example.test')
+    with patch.object(gitlab, '_api', side_effect=[{'id': 1}, {'path_with_namespace': 'group/subgroup/project'}, {'access_level': 40}]), patch.object(gitlab, 'setup_webhook', side_effect=RuntimeError('remote unavailable')):
+        response = client.post('/api/gitlab/host', json={'provider': 'gitlab@corp', 'project': 'group/subgroup/project'})
+    assert response.status_code == 502
+    assert db.execute('SELECT 1 FROM managed_repos WHERE repo_key=?', (user['repo_key'],)).fetchone() is None
+
+
+def test_webhook_persists_before_ack_and_storage_failure_is_retryable(api_client):
+    from src.user.db import add_managed_repo
+    from src.vcs.gitlab_inbox import get_inbox
+    import uuid
+    client, user = api_client
+    add_managed_repo(user['repo_key'], 'group/subgroup', 'project', host_user_id=user['id'], webhook_secret='hook-secret')
+    payload = {'object_kind': 'issue', '_internal': True, 'project': {'path_with_namespace': 'group/subgroup/project', 'web_url': 'https://gitlab.example.test/gitlab/group/subgroup/project'}}
+    headers = {'X-Gitlab-Token': 'hook-secret', 'X-Gitlab-Event': 'Issue Hook', 'X-Gitlab-Event-UUID': uuid.uuid4().hex}
+    response = client.post('/webhook/gitlab/corp', json=payload, headers=headers)
+    assert response.status_code == 200
+    queue = get_inbox()
+    job = queue.claim()
+    assert job['repo_key'] == user['repo_key']
+    assert 'hook-secret' not in str(job) and '_internal' not in job['body']
+    assert client.post('/webhook/gitlab/corp', json=payload, headers=headers).json()['status'] == 'duplicate'
+    queue.finish(job)
+    with patch('src.vcs.gitlab_inbox.Inbox.enqueue', side_effect=RuntimeError('db unavailable')):
+        assert client.post('/webhook/gitlab/corp', json=payload, headers=headers).status_code == 503
+
+
+def test_failed_rehosting_preserves_existing_hook(api_client, monkeypatch):
+    from src.api.routes import gitlab
+    from src.user.db import add_managed_repo
+    from src.session_manager import db
+    client, user = api_client
+    user['auth_type'] = 'jwt'
+    add_managed_repo(user['repo_key'], 'group/subgroup', 'project', host_user_id=user['id'], webhook_id=42, webhook_secret='original-secret')
+    monkeypatch.setattr(gitlab, '_token', lambda *a: 'test')
+    monkeypatch.setattr('src.user.db.get_meta_value', lambda *a: 'https://grape.example.test')
+    with patch.object(gitlab, '_api', side_effect=[{'id': 1}, {'path_with_namespace': 'group/subgroup/project'}, {'access_level': 40}]), patch.object(gitlab, 'setup_webhook', side_effect=RuntimeError('remote unavailable')):
+        assert client.post('/api/gitlab/host', json={'provider': 'gitlab@corp', 'project': 'group/subgroup/project'}).status_code == 502
+    assert tuple(db.execute('SELECT webhook_id, webhook_secret FROM managed_repos WHERE repo_key=?', (user['repo_key'],)).fetchone()) == (42, 'original-secret')
