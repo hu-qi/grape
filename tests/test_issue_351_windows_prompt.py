@@ -143,7 +143,7 @@ class _StdinEchoBackend(AgentRuntime):
     def build_args(self, prompt, session_id=""):
         code = (
             "import sys, json\n"
-            "data = sys.stdin.read()\n"
+            "data = sys.stdin.buffer.read().decode('utf-8')\n"
             "print(json.dumps({'type': 'text', 'part': {'type': 'text', 'text': data}}), flush=True)\n"
         )
         return ["-c", code]
