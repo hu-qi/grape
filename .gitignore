@@ -149,3 +149,4 @@ configs/oauth-providers.json
 
 # Local cloud acceptance manifests, secrets and evidence (never publish).
 .lab-local/
+deploy/gitlab-lab/cli-artifacts/*.whl

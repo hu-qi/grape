@@ -35,6 +35,8 @@
 
 `grape.Dockerfile` 包含 Python、Node、Git、CA 和 SSH 客户端，以 UID/GID 10001 运行应用。构建时明确选择 Debian bookworm 系列的 Python/Node 镜像及 digest，避免跨发行版复制 Node 二进制。可通过 `AGENT_NPM_PACKAGE` 安装显式版本的 npm Agent；Python/独立二进制 Agent 需使用经审查的派生镜像。引擎和模型必须明确选择，不会自动替换。OpenCode 当前验收版本为 `opencode-ai@1.19.5`；Grape 使用该版本支持的 `--auto` 参数。
 
+另行取得经过审查的独立 Grape CLI wheel，放入 `deploy/gitlab-lab/cli-artifacts/`（该目录的 wheel 已被 Git 忽略），记录其来源提交和 SHA256。构建要求目录中恰好一个 wheel，并通过 `GRAPE_CLI_WHEEL_SHA256` 校验后安装到独立虚拟环境。CLI 与服务端都使用顶层 `src` 包；镜像内的 `grape` 启动器使用 Python 隔离模式，避免工作目录或 `PYTHONPATH` 导致导入错误。不要从公共 PyPI 上按同名包猜测安装，也不要在镜像构建中传入私有仓库凭据。
+
 从仓库根目录构建，以下变量都应来自本地配置，不含登录凭据：
 
 ```sh
@@ -42,6 +44,7 @@ docker build --platform linux/amd64 \
   -f deploy/gitlab-lab/grape.Dockerfile \
   --build-arg "PYTHON_IMAGE=${PYTHON_IMAGE:?digest required}" \
   --build-arg "NODE_IMAGE=${NODE_IMAGE:?digest required}" \
+  --build-arg "GRAPE_CLI_WHEEL_SHA256=${GRAPE_CLI_WHEEL_SHA256:?reviewed wheel digest required}" \
   --build-arg "AGENT_NPM_PACKAGE=${AGENT_NPM_PACKAGE:-}" \
   --build-arg "VCS_REF=$(git rev-parse HEAD)" \
   -t "${GRAPE_TAG:?SWR image tag required}" .

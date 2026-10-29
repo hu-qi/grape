@@ -13,6 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# The CLI is a separate project. Supply its reviewed wheel locally; never put
+# private repository credentials in build arguments or clone it during a build.
+COPY deploy/gitlab-lab/install_cli.py /tmp/install_cli.py
+COPY deploy/gitlab-lab/cli-artifacts/ /tmp/grape-cli-artifacts/
+ARG GRAPE_CLI_WHEEL_SHA256
+RUN python /tmp/install_cli.py --directory /tmp/grape-cli-artifacts --sha256 "${GRAPE_CLI_WHEEL_SHA256}" \
+    && rm -rf /tmp/grape-cli-artifacts /tmp/install_cli.py
 # Optional: explicitly selected, version-pinned npm Agent. Python/standalone
 # engines need a reviewed derived image; no engine or model is silently selected.
 ARG AGENT_NPM_PACKAGE=""
