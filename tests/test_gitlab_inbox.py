@@ -1,4 +1,5 @@
 """Durable delivery acceptance, restart recovery and retry contracts."""
+import os
 import sqlite3
 import threading
 
@@ -9,10 +10,24 @@ from src.vcs.gitlab_inbox import Inbox
 
 @pytest.fixture
 def inbox(tmp_path):
-    db = sqlite3.connect(tmp_path / 'inbox.db', check_same_thread=False)
+    # CI provides an isolated MySQL service with this dedicated test database.
+    # No application DB settings or credentials are reused.
+    port = os.environ.get('GRAPE_TEST_MYSQL_PORT')
+    if port:
+        from src.mysql_compat import MySQLCompatDB
+        db = MySQLCompatDB(host='127.0.0.1', port=int(port), user='grape_test',
+                           password='grape_test', database='grape_gitlab_ci')
+    else:
+        db = sqlite3.connect(tmp_path / 'inbox.db', check_same_thread=False)
     queue = Inbox(db, threading.RLock())
-    yield queue
-    db.close()
+    db.execute('DELETE FROM gitlab_webhook_inbox')
+    db.commit()
+    try:
+        yield queue
+    finally:
+        db.execute('DELETE FROM gitlab_webhook_inbox')
+        db.commit()
+        db.close()
 
 
 def put(queue, provider='gitlab', repo='gitlab:g/p', delivery='delivery-1'):
@@ -124,6 +139,7 @@ async def test_worker_records_dispatch_outcome(inbox, monkeypatch, raises):
         for _ in range(200):
             with inbox.lock:
                 row = inbox.db.execute('SELECT status, attempts FROM gitlab_webhook_inbox').fetchone()
+                inbox.db.commit()  # Refresh MySQL repeatable-read snapshots between polls.
             if tuple(row) == (expected, 1):
                 break
             await asyncio.sleep(0.01)

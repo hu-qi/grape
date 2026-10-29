@@ -16,6 +16,21 @@ jobs:
   gitlab-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: grape_root_ci
+          MYSQL_DATABASE: grape_gitlab_ci
+          MYSQL_USER: grape_test
+          MYSQL_PASSWORD: grape_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pgrape_root_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,6 +52,10 @@ jobs:
           tests/test_path_b_self_loop_r20.py tests/test_repos_host_provider.py
           tests/test_repos_remove_cleanup.py tests/test_repos_session_project_info.py
           tests/test_lobby_managed_repos.py
+      - name: MySQL durable inbox contracts
+        env:
+          GRAPE_TEST_MYSQL_PORT: '3306'
+        run: python -m pytest -q tests/test_gitlab_inbox.py
       - name: JavaScript behavior and syntax
         run: |
           node tests/js/test_gitlab_ui.js
