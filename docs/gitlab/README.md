@@ -114,3 +114,5 @@ unset GITLAB_TOKEN CORP_GITLAB_TOKEN
 参考：[GitLab REST API](https://docs.gitlab.com/api/rest/)、[MR API](https://docs.gitlab.com/api/merge_requests/)、[Project Webhooks](https://docs.gitlab.com/api/project_webhooks/)。
 
 专项 CI 为 `.github/workflows/gitlab-integration.yml`，在 PR 上运行隔离的 Python 回归、MySQL 8.0 收件表契约测试、JS 行为测试及语法检查，无需真实 Token。排查投递可检查 `gitlab_webhook_inbox` 的 `status/attempts/updated_at`；`done` 仅表示派发函数正常返回，不代表 Agent 任务成功。失败记录和待处理事件不会按成功投递的 24 小时规则删除。未携带事件 UUID 的投递会生成独立 ID，无法跨请求去重。
+
+独立 GitLab 与 Grape 的 ECS 验收部署模板、网络规则和预检工具见 [双 ECS 验收环境](../../deploy/gitlab-lab/README.md)。

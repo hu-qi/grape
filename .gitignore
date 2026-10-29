@@ -146,3 +146,6 @@ _e2e_test.py
 configs/oauth-providers.json
 .upgrade-backup/
 .project-info/
+
+# Local cloud acceptance manifests, secrets and evidence (never publish).
+.lab-local/

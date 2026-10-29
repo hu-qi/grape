@@ -1,0 +1,52 @@
+name: grape-lab-gitlab
+services:
+  gitlab:
+    image: ${GITLAB_IMAGE:?Set an official GitLab image with sha256 digest}
+    hostname: ${LAB_HOST:?Set GitLab hostname}
+    restart: unless-stopped
+    shm_size: 256m
+    environment:
+      LAB_HOST: ${LAB_HOST}
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url "https://#{ENV['LAB_HOST']}"
+        letsencrypt['enable'] = false
+        nginx['listen_port'] = 80
+        nginx['listen_https'] = false
+        gitlab_rails['initial_root_password'] = File.read('/run/secrets/root_password').strip
+    secrets:
+      - root_password
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    healthcheck:
+      test: [CMD, /opt/gitlab/bin/gitlab-healthcheck, --fail, --max-time, '10']
+      interval: 30s
+      timeout: 15s
+      retries: 20
+      start_period: 180s
+  ingress:
+    image: ${CADDY_IMAGE:?Set Caddy image with sha256 digest}
+    restart: unless-stopped
+    environment:
+      LAB_HOST: ${LAB_HOST}
+      UPSTREAM: gitlab:80
+    ports:
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls:/etc/caddy/tls:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      gitlab:
+        condition: service_healthy
+secrets:
+  root_password:
+    file: ./secrets/root_password
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+  caddy-data:
+  caddy-config:

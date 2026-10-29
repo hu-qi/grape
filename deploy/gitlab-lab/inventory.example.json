@@ -1,0 +1,23 @@
+{
+  "region": "REQUIRED",
+  "deployment_id": "grape-gitlab-lab",
+  "gitlab": {
+    "host": "gitlab-lab.example.com",
+    "cpu": 8,
+    "memory_gib": 16,
+    "disk_gib": 100,
+    "image": "gitlab/gitlab-ee@sha256:REQUIRED"
+  },
+  "grape": {
+    "host": "grape-lab.example.com",
+    "cpu": 4,
+    "memory_gib": 8,
+    "disk_gib": 100,
+    "image": "swr.REGION.myhuaweicloud.com/ORG/grape@sha256:REQUIRED",
+    "revision": "REQUIRED",
+    "agent_engine": "REQUIRED",
+    "agent_model": "REQUIRED"
+  },
+  "caddy_image": "caddy@sha256:REQUIRED",
+  "mysql_image": "mysql@sha256:REQUIRED"
+}

@@ -13,3 +13,6 @@ skills/tools/
 skills/huawei-cloud-ecs-servers/
 branches-backup-*.bundle
 configs/
+
+# Generated lab credentials and acceptance evidence
+.lab-local/
