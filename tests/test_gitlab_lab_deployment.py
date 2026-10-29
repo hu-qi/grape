@@ -129,3 +129,15 @@ def test_generated_compose_passes_docker_validation(inventory, tmp_path):
         result = subprocess.run(['docker', 'compose', 'config', '--quiet'], cwd=target / role,
                                 capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, f'{role} Compose configuration rejected'
+
+
+def test_opencode_config_locks_model_without_embedding_credentials(inventory, tmp_path):
+    inventory['grape']['agent_engine'] = 'opencode'
+    target = tmp_path / 'isolated'
+    lab.prepare(inventory, target)
+    config = json.loads((target / 'grape/configs/opencode.json').read_text())
+    assert config['model'] == config['small_model'] == 'lab/explicit-test-model'
+    assert config['enabled_providers'] == ['lab']
+    assert config['provider']['lab']['options']['apiKey'] == '{env:LAB_MODEL_API_KEY}'
+    assert (target / 'grape/engine.env').read_text() == ''
+    assert 'OPENCODE_CONFIG=/app/configs/opencode.json' in (target / 'grape/runtime.env').read_text()

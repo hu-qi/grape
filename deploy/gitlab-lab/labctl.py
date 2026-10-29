@@ -58,6 +58,24 @@ def write_private(path, text):
         stream.write(text)
 
 
+def opencode_config(model):
+    """Keep model selection explicit and reference credentials only via env."""
+    return {
+        '$schema': 'https://opencode.ai/config.json',
+        'model': 'lab/' + model,
+        'small_model': 'lab/' + model,
+        'enabled_providers': ['lab'],
+        'autoupdate': False,
+        'share': 'disabled',
+        'provider': {'lab': {
+            'npm': '@ai-sdk/openai-compatible',
+            'name': 'Lab model gateway',
+            'options': {'baseURL': '{env:LAB_MODEL_BASE_URL}', 'apiKey': '{env:LAB_MODEL_API_KEY}'},
+            'models': {model: {'name': model}},
+        }},
+    }
+
+
 def prepare(config, target):
     validate_inventory(config)
     target = Path(target)
@@ -85,7 +103,12 @@ def prepare(config, target):
     write_private(folder / 'mysql.env', f'MYSQL_DATABASE=grape_lab\nMYSQL_USER=grape_lab\nMYSQL_PASSWORD={password}\nMYSQL_ROOT_PASSWORD={secrets.token_urlsafe(36)}\n')
     providers = json.dumps({'lab': {'url': 'https://' + hostname(config['gitlab']['host'])}}, separators=(',', ':'))
     write_private(folder / 'runtime.env', f'JWT_SECRET={jwt}\nGRAPE_ADMIN_PASSWORD={secrets.token_urlsafe(36)}\nDEVOPS_DB_PASSWORD={password}\nGRAPE_GITLAB_INSTANCES={providers}\n')
+    write_private(folder / 'engine.env', '')
     (folder / 'configs').mkdir(mode=0o700)
+    if config['grape']['agent_engine'] == 'opencode':
+        write_private(folder / 'configs/opencode.json', json.dumps(opencode_config(config['grape']['agent_model']), indent=2) + '\n')
+        with (folder / 'runtime.env').open('a') as stream:
+            stream.write('OPENCODE_CONFIG=/app/configs/opencode.json\n')
     security = {'env': 'staging', 'jwt': {'kid_current': 'lab-v1', 'secret_keys': 'lab-v1:' + jwt},
                 'credential_keys': 'lab-v1:' + base64.b64encode(secrets.token_bytes(32)).decode()}
     write_private(folder / 'configs/server-config.json', json.dumps({'server_base_url': 'https://' + hostname(config['grape']['host'])}) + '\n')

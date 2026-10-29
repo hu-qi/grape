@@ -33,7 +33,7 @@
 
 所有部署镜像均用 `repository@sha256:...`。选择受维护的 GitLab 明确版本、MySQL 8.0、Caddy 2，并解析其实际 digest；模板不默认拉取 latest。CPU 架构统一使用 linux/amd64。
 
-`grape.Dockerfile` 包含 Python、Node、Git、CA 和 SSH 客户端，以 UID/GID 10001 运行应用。构建时明确选择 Debian bookworm 系列的 Python/Node 镜像及 digest，避免跨发行版复制 Node 二进制。可通过 `AGENT_NPM_PACKAGE` 安装显式版本的 npm Agent；Python/独立二进制 Agent 需使用经审查的派生镜像。引擎和模型必须明确选择，不会自动替换。
+`grape.Dockerfile` 包含 Python、Node、Git、CA 和 SSH 客户端，以 UID/GID 10001 运行应用。构建时明确选择 Debian bookworm 系列的 Python/Node 镜像及 digest，避免跨发行版复制 Node 二进制。可通过 `AGENT_NPM_PACKAGE` 安装显式版本的 npm Agent；Python/独立二进制 Agent 需使用经审查的派生镜像。引擎和模型必须明确选择，不会自动替换。OpenCode 当前验收版本为 `opencode-ai@1.19.5`；Grape 使用该版本支持的 `--auto` 参数。
 
 从仓库根目录构建，以下变量都应来自本地配置，不含登录凭据：
 
@@ -61,13 +61,15 @@ python3 deploy/gitlab-lab/labctl.py prepare \
   --directory .lab-local/rendered
 ```
 
-工具只生成本地文件，独占创建，第二次运行不会覆盖/轮换已有密码。生成目录权限 0700，密钥文件 0600。GitLab root 密码、Grape 管理员初始密码、JWT、凭据加密密钥、MySQL 密码分别生成，不复制原系统凭据。GitLab root 密码仅在新数据库初始化时生效。
+工具只生成本地文件，独占创建，第二次运行不会覆盖/轮换已有密码。生成目录权限 0700，密钥文件 0600。GitLab root 密码、Grape 管理员初始密码、JWT、凭据加密密钥、MySQL 密码分别生成，不复制原系统凭据。GitLab root 密码仅在新数据库初始化时生效。选择 OpenCode 时生成不含密钥的 opencode.json，主模型与 small_model 均锁定到指定模型；在本机私密的 `grape/engine.env` 中注入 `LAB_MODEL_API_KEY` 和 `LAB_MODEL_BASE_URL`，不要用 Docker build-arg 传入密钥。模型网关优先使用可信 HTTPS 或已验证的私网路径；公网 HTTP 会明文传输认证头。
 
 - `.lab-local/rendered/gitlab`：只分发到 GitLab ECS。
 - `.lab-local/rendered/grape`：只分发到 Grape ECS。
 - `inventory.json`：本地保存，不提交 PR、不放入镜像。
 
 分别把匹配域名的 `fullchain.pem` / `privkey.pem` 放到各角色的 `tls/`。默认使用预先签发的可信证书；如使用私有 CA，需在 GitLab、Grape 和 Agent Git 传输中配置同一信任链，不关闭校验。Grape 的 `ca_bundle` 需要显式挂载证书路径；探测工具支持 `--ca-bundle`。
+
+如果使用独立数据盘，应在全新的验收主机上先按已记录的 EVS ID 校验并挂载，再把 Docker data-root 指向该盘（例如 /srv/docker）；否则具名卷默认仍落在系统盘。不要格式化任何未核实归属的设备。
 
 远程主机需预装 Docker Engine 与 Compose。用受控 SSH/SCP 分发到 `/srv/grape-gitlab-lab`，两台主机分别只接收各自角色目录；禁止把整个含密钥的包上传到 SWR 或 Git。
 
@@ -105,6 +107,8 @@ python3 deploy/gitlab-lab/labctl.py probe \
 
 返回值包含健康、Grape 对外基址、Agent online 检查；失败退出码为 1。可通过本地环境 `GITLAB_LAB_TOKEN` / `GRAPE_LAB_API_KEY` 增加认证只读检查，使用终端安全输入，禁止出现在命令行和聊天。API Key 必须是 Grape 用户级 Key，不能用任务 session Token 管理连接。脚本不输出响应正文和异常详情，不跟随重定向。`full_e2e_verified` 始终为 false，明确表示该脚本只做预检。
 
+同一 VPC 不会自动让公网域名走私网。分配 ECS 私网 IP 后，在 GitLab/Grape 的 Compose override 中为调用方容器配置对方域名的 extra_hosts（或使用明确的私有 DNS），保持域名和证书一致；未配置时须按实际公网源 IP 检查安全组。
+
 使用私网的 GitLab ECS 到 Grape 的回调，应再从 GitLab 管理界面发起真实 Hook 测试；从操作员电脑探测成功不能证明这一方向连通。
 
 ## 5. 真实 Agent 验收与证据
@@ -123,6 +127,8 @@ python3 deploy/gitlab-lab/labctl.py probe \
 重启/异常注入尚未提供一键工具，因为它必须绑定实际的 worker、任务和事件，避免把空队列重启冒充恢复验收。上述步骤应在专用验收项目执行，不以原企业业务项目作为破坏性测试对象。
 
 ## 6. DevKit 云资源落地门槛
+
+先查域名的公网权威 NS；在华为云能查到同名 Zone 不代表该 Zone 已被委派。DNS 在其他提供商时，应向实际权威提供商添加精确的 A/TXT 记录，不修改无效 Zone 或根域委派。中国大陆部署还需先确认域名备案/接入条件；非大陆区域应重新询价，不能沿用大陆报价。
 
 用 DevKit 的脱敏 profile 和只读身份接口确认账号，再在用户指定区域查询网络、镜像、规格、配额和现有同名资源。不要跨区域盲扫。真实云资源 ID、域名和费用结果只保存在 `.lab-local/` 或当前会话状态文件中。
 
