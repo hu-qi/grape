@@ -1,0 +1,69 @@
+name: gitlab-integration
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/gitlab-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitlab-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitlab-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: grape_root_ci
+          MYSQL_DATABASE: grape_gitlab_ci
+          MYSQL_USER: grape_test
+          MYSQL_PASSWORD: grape_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pgrape_root_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest pytest-asyncio pytest-timeout httpx
+      - name: Python integration and regression tests
+        run: >-
+          python -m pytest -q
+          tests/test_gitlab_inbox.py tests/test_gitlab_integration.py tests/test_gitlab_lab_deployment.py tests/test_gitlab_lab_cli.py tests/test_agent_executor.py::TestOpencodeRuntime
+          tests/test_git_provider.py tests/test_repogit.py
+          tests/test_prompt_builder.py tests/test_multi_vcs.py tests/test_linked_repos.py
+          tests/test_login_provider.py tests/test_token_injection_r20.py
+          tests/test_path_b_self_loop_r20.py tests/test_repos_host_provider.py
+          tests/test_repos_remove_cleanup.py tests/test_repos_session_project_info.py
+          tests/test_lobby_managed_repos.py
+      - name: MySQL durable inbox contracts
+        env:
+          GRAPE_TEST_MYSQL_PORT: '3306'
+        run: python -m pytest -q tests/test_gitlab_inbox.py
+      - name: JavaScript behavior and syntax
+        run: |
+          node tests/js/test_gitlab_ui.js
+          node tests/js/test_repos_host_provider.js
+          node tests/js/test_issue_12_host_confirm.js
+          node tests/js/test_issue_290_view_issue.js
+          for file in src/api/static/js/app.js src/api/static/js/pages/{account,repos,settings,gitlab}.js; do node --check "$file"; done
+      - name: Python compilation and whitespace
+        run: |
+          python -m compileall -q src scripts/verify_gitlab.py
+          git diff --check

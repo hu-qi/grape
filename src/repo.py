@@ -21,11 +21,17 @@ class Repo:
     @property
     def api_base(self) -> str:
         """返回该仓库对应平台的 API 基础 URL。"""
+        from src.vcs.gitlab_config import is_gitlab, get_instance
+        if is_gitlab(self.provider):
+            return get_instance(self.provider).api_base
         return _API_BASES.get(self.provider, _API_BASES["gitcode"])
 
     @property
     def clone_url(self) -> str:
         """返回仓库的 git clone URL。"""
+        from src.vcs.gitlab_config import is_gitlab, get_instance
+        if is_gitlab(self.provider):
+            return get_instance(self.provider).web_url(f"{self.owner}/{self.name}") + '.git'
         host = _HOSTS.get(self.provider, _HOSTS["gitcode"])
         return f"https://{host}/{self.owner}/{self.name}.git"
 

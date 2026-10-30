@@ -760,8 +760,9 @@ def _vcs_issue_url(repo_key: str, issue_number: int) -> str:
     _p = str(repo_key).split(":", 1)[0]
     if _p == "github":
         return f"https://github.com/{owner}/{repo}/issues/{issue_number}"
-    if _p == "gitlab":
-        return f"https://gitlab.com/{owner}/{repo}/-/issues/{issue_number}"
+    from src.vcs.gitlab_config import is_gitlab, get_instance
+    if is_gitlab(_p):
+        return get_instance(_p).web_url(f"{owner}/{repo}") + f"/-/issues/{issue_number}"
     return f"https://gitcode.com/{owner}/{repo}/issues/{issue_number}"
 
 
@@ -1094,6 +1095,20 @@ def _find_open_issue_by_title(api_token: str, owner: str, repo: str, title: str,
     Issue #344: GitHub 分支改用 Search API 精确匹配（in:title + repo:scope）。
     返回 issue number（找到）或 None（真没找到）。token 失效时抛 RuntimeError。
     """
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider):
+        from src.vcs.gitlab_http import request
+        from src.vcs.gitlab_manager import project_path
+        page = 1
+        while True:
+            issues = request(provider, "GET", project_path(f"{owner}/{repo}") + "/issues", api_token,
+                             params={"state": "opened", "search": title, "in": "title", "per_page": 100, "page": page})
+            for issue in issues:
+                if issue.get("title", "").strip() == title.strip():
+                    return int(issue["iid"])
+            if len(issues) < 100:
+                return None
+            page += 1
     import urllib.parse as _ul
     if provider == "github":
         # Issue #344: 改用 GitHub Search API 精确匹配 title，不再分页遍历
@@ -1241,6 +1256,14 @@ def _patch_github_issue_body(api_token: str, owner: str, repo: str, issue_num: i
     return _out
 
 
+
+def _post_gitlab_issue(api_token, owner, repo, title, description, assignee="", provider="gitlab"):
+    from src.vcs.providers.gitlab import Adapter, translate
+    adapter = Adapter(provider)
+    body = translate("issues", "create", {"title": title, "body": description, "assignee": assignee}, {})
+    return adapter.request("POST", adapter.url(owner, repo, "/issues"), api_token, body)
+
+
 def create_standard_task(repo_key: str, title: str, description: str,
                          bot_token: str, assignee: str = "", labels=None) -> dict:
     """真实 GitCode Issue 创建 + 标准任务建档（onboarding 模块调用，与手动创建任务同一原子路径）。
@@ -1260,9 +1283,12 @@ def create_standard_task(repo_key: str, title: str, description: str,
         return {"ok": False, "code": 400, "message": "bot token 缺失"}
     if not assignee:
         assignee = owner or ""
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(_provider) and assignee == owner:
+        assignee = ""
     # Issue #344: 查重失败时返回明确错误，不抛异常中断 onboarding 流程
     try:
-        issue_num = _find_open_issue_by_title(bot_token, owner, rname, title.strip())
+        issue_num = _find_open_issue_by_title(bot_token, owner, rname, title.strip(), provider=_provider)
     except RuntimeError as e:
         return {"ok": False, "code": 502, "message": f"查重失败，Bot Token 可能失效: {str(e)[:200]}"}
     created = False
@@ -1270,7 +1296,9 @@ def create_standard_task(repo_key: str, title: str, description: str,
         # 已有同标题 open Issue → 直接建档（幂等：不再重复创建 Issue）
         issue_num = int(issue_num)
     else:
-        if _provider == "github":
+        if is_gitlab(_provider):
+            resp = _post_gitlab_issue(bot_token, owner, rname, title.strip(), description or "", assignee, _provider)
+        elif _provider == "github":
             resp = _post_github_issue(bot_token, owner, rname, title.strip(),
                                       (description or "").strip(), assignee=assignee)
         else:
@@ -1330,6 +1358,10 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
     repo_key = to_repo_key(body.repo_key)
     owner, rname = split_owner_repo(repo_key)
     # provider 分流：github: → GitHub API，gitcode: → GitCode API
+    from src.repo_key import parse_repo_key
+    from src.vcs.gitlab_config import is_gitlab
+    _provider = parse_repo_key(repo_key)[0]
+    _is_gitlab = is_gitlab(_provider)
     _is_github = repo_key.startswith("github:")
     # _preauth_token: autopilot 等内部调用（auth_type=api_key/internal）预注入 bot token
     # JWT 登录用户的 token 是 session JWT 不是 GitCode API token，不能走此路径
@@ -1341,6 +1373,11 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
             _preauth_token = _token_val
     if _preauth_token:
         api_token = _preauth_token
+    elif _is_gitlab:
+        from src.vcs.gitlab_credentials import user_token, repo_token
+        api_token = user_token(user['id'], _provider) or repo_token(repo_key)
+        if not api_token:
+            raise HTTPException(400, "GitLab token is not configured")
     elif _is_github:
         # Issue #343: GitHub 写操作同样走仓库 bot token
         from src.user.db import get_github_token
@@ -1359,7 +1396,7 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
             })
     # 是否使用「用户自己的 GitCode token」：用于 401 时区分「用户登录失效」（引导重新绑定）
     # 与「仓库 bot token 失效」（提示检查仓库 Bot Token 配置）两套文案。
-    _using_user_token = (not _preauth_token) and (not _is_github)
+    _using_user_token = (not _preauth_token) and (not _is_github) and (not _is_gitlab)
     # Issue #343: assignee 优先用 GitCode/GitHub 登录名（external_login），
     # 而非 grape 平台 username——GitCode 侧 assignee 必须是平台登录名
     if body.assignee and body.assignee.strip():
@@ -1376,11 +1413,14 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
                     break
         except Exception:
             pass  # 查不到就用 grape username fallback
+    if _is_gitlab and not (body.assignee or "").strip():
+        from src.user.db import get_credential
+        assignee = (get_credential(user['id'], _provider) or {}).get('username', '')
     # 1) 幂等：同 title open issue 已存在 → 提示用户任务已存在
     # Issue #343: 查重失败（token 失效）时给明确提示，不静默放行导致重复建单
     try:
         issue_num = _find_open_issue_by_title(api_token, owner, rname, body.title.strip(),
-                                              provider="github" if _is_github else "gitcode")
+                                              provider=_provider)
     except RuntimeError as _dedup_err:
         from src.vcs.token_error import is_auth_error_exc, BOT_TOKEN_INVALID_MSG, GITCODE_USER_TOKEN_INVALID_MSG
         if is_auth_error_exc(_dedup_err) and _using_user_token:
@@ -1430,7 +1470,9 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
                 _desc_with_attach += "\n\n## 附件\n" + "\n".join(_attachments)
         # Issue #343 问题十一修复: 捕获建单 API 403/422，转成友好报错而非 500
         try:
-            if _is_github:
+            if _is_gitlab:
+                resp = _post_gitlab_issue(api_token, owner, rname, body.title.strip(), _desc_with_attach, assignee, _provider)
+            elif _is_github:
                 resp = _post_github_issue(api_token, owner, rname, body.title.strip(),
                                           _desc_with_attach, assignee=assignee)
             else:
@@ -1579,7 +1621,12 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
             log.warning(f"create_task: set_subtask_mode failed: {_e}")
         try:
             _marker = "\n\n---\n[multi-task-mode] 本任务启用多任务模式，将由 Issue Agent 自动判断是否拆分为子任务执行。"
-            if _is_github:
+            if _is_gitlab:
+                from src.vcs.providers.gitlab import Adapter
+                adapter = Adapter(_provider)
+                adapter.request("PUT", adapter.url(owner, rname, f"/issues/{issue_num}"), api_token,
+                                {"description": (body.description or "") + _marker})
+            elif _is_github:
                 # Issue #343: GitHub 写操作走 bot token
                 _patch_github_issue_body(api_token, owner, rname, issue_num, (body.description or "") + _marker)
             else:
@@ -1636,6 +1683,9 @@ async def create_task_via_issue(body: TaskCreateBody, user: dict = Depends(get_c
             # 与 webhook 回流去重语义相反）。
             # 审查 P0-1 修正：run_pipeline 调用移回 if/else 之外（两平台共用）——
             # 原版本误缩进进 else（GitCode）分支，GitHub 建单后不再同步触发流水线。
+            if _is_gitlab:
+                _pipe_payload["object_attributes"]["description"] = body.description or ""
+                _pipe_headers = {"Content-Type": "application/json", "X-Gitlab-Event": "Issue Hook"}
             _pipe_payload["_grape_internal_trigger"] = True
             from src.api.event_pipeline import run_pipeline
             _pipe_result = run_pipeline(_pipe_json.dumps(_pipe_payload).encode(), _pipe_headers,

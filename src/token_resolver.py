@@ -232,11 +232,89 @@ class GitHubProvider(VCSProvider):
         return get_user_github_token_with_refresh(username, user_id) or ""
 
 
+class GitLabProvider(VCSProvider):
+    """One GitLab instance. No GitCode/GitHub credential fallback."""
+
+    def __init__(self, provider="gitlab"):
+        from src.vcs.gitlab_config import get_instance
+        self.instance = get_instance(provider)
+
+    @property
+    def provider_name(self):
+        return self.instance.provider
+
+    def verify_token(self, token):
+        from src.vcs.gitlab_http import request
+        from src.vcs.providers.gitlab import normalize_response
+        return normalize_response(request(self.provider_name, "GET", "/user", token))
+
+    def get_user_login(self, token):
+        return self.verify_token(token).get("login", "")
+
+    def add_collaborator(self, api_token, owner, repo, username, permission="maintainer"):
+        from src.vcs.gitlab_http import request, GitLabError
+        from src.vcs.gitlab_manager import project_path
+        users = request(self.provider_name, "GET", "/users", api_token, params={"username": username})
+        user = next((u for u in users if u.get("username", "").lower() == username.lower()), None)
+        if not user:
+            raise ValueError("GitLab user not found")
+        path = project_path(f"{owner}/{repo}") + "/members"
+        level = {"maintainer": 40, "admin": 40, "developer": 30, "push": 30, "reporter": 20}.get(permission, 30)
+        try:
+            request(self.provider_name, "POST", path, api_token, {"user_id": user["id"], "access_level": level})
+        except GitLabError as exc:
+            if exc.status != 409:
+                raise
+        return True
+
+    def remove_collaborator(self, api_token, owner, repo, username):
+        from src.vcs.gitlab_http import request
+        from src.vcs.gitlab_manager import project_path
+        users = request(self.provider_name, "GET", "/users", api_token, params={"username": username})
+        user = next((u for u in users if u.get("username") == username), None)
+        if user:
+            request(self.provider_name, "DELETE", project_path(f"{owner}/{repo}") + "/members/" + str(user["id"]), api_token)
+        return True
+
+    def setup_webhook(self, api_token, owner, repo, webhook_url, webhook_secret=""):
+        from src.vcs.gitlab_manager import setup_webhook
+        return setup_webhook(api_token, f"{owner}/{repo}", webhook_url, webhook_secret, self.provider_name)
+
+    def remove_webhook(self, api_token, owner, repo, hook_id):
+        from src.vcs.gitlab_manager import remove_webhook
+        return remove_webhook(api_token, f"{owner}/{repo}", hook_id, self.provider_name)
+
+    def token_storage_field(self):
+        return "bot_gitlab_token"
+
+    def webhook_token_field(self):
+        return "webhook_secret"
+
+    def session_token_field(self):
+        return "repo_gitcode_token"  # Existing task/session transport column, scoped by repo_key.
+
+    def global_bot_meta_key(self):
+        return "global_bot_" + self.provider_name + "_token"
+
+    def global_bot_status_meta_key(self):
+        return "global_" + self.provider_name + "_bot_token_status"
+
+    def pat_create_url(self):
+        return self.instance.url + "/-/user_settings/personal_access_tokens"
+
+    def fetch_user_token(self, username, user_id):
+        from src.vcs.gitlab_credentials import user_token
+        return user_token(user_id, self.provider_name)
+
+
 def create_provider(provider: str) -> VCSProvider:
     """根据 provider 标识创建 VCSProvider 实例。
 
     provider: "github" / "gitcode"（默认）
     """
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider):
+        return GitLabProvider(provider)
     if provider == "github":
         return GitHubProvider()
     return GitCodeProvider()
@@ -244,9 +322,8 @@ def create_provider(provider: str) -> VCSProvider:
 
 def create_provider_from_repo_key(repo_key: str) -> VCSProvider:
     """根据 repo_key 前缀创建 VCSProvider。"""
-    if repo_key and repo_key.startswith("github:"):
-        return GitHubProvider()
-    return GitCodeProvider()
+    from src.repo_key import parse_repo_key
+    return create_provider(parse_repo_key(repo_key)[0])
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +517,7 @@ class RepoBotToken(TokenStrategy):
         if not repo_key:
             return ""
         # 路径 B 仓库跳过仓库级 bot token（降级场景脏写入防护）
-        if self._is_path_b(repo_key):
+        if self._is_path_b(repo_key) and not isinstance(self.provider, GitLabProvider):
             return ""
         field = self.provider.token_storage_field()  # bot_gitcode_token / bot_github_token
         try:
@@ -455,6 +532,9 @@ class RepoBotToken(TokenStrategy):
                 )
                 row = c.fetchone()
                 if row and row[0]:
+                    if isinstance(self.provider, GitLabProvider):
+                        from src.auth.credential_crypto import decrypt
+                        return decrypt(row[0])
                     return row[0]
         except Exception as e:
             log.warning(f"RepoBotToken._fetch: {e}")
@@ -525,6 +605,10 @@ class GlobalBotToken(TokenStrategy):
         return "global_bot"
 
     def _fetch(self, repo_key: str) -> str:
+        if isinstance(self.provider, GitLabProvider):
+            if self._is_path_b(repo_key):
+                return ""
+            return self.provider.instance.token
         # 路径 B 仓库跳过全局 bot token（§13.1）
         if self._is_path_b(repo_key):
             return ""
@@ -582,6 +666,8 @@ class UserToken(TokenStrategy):
         return "user"
 
     def _fetch(self, repo_key: str) -> str:
+        if isinstance(self.provider, GitLabProvider):
+            return self.provider.fetch_user_token("", self._get_host_user_id(repo_key))
         from src.auth.grape_account_db import get_grape_account_by_id
         host_user_id = self._get_host_user_id(repo_key)
         if host_user_id == 0:
@@ -599,6 +685,9 @@ class UserToken(TokenStrategy):
 
         供 read_stored_token() 调用——A2A 鉴权 / session 写入只需原始值。
         """
+        if isinstance(self.provider, GitLabProvider):
+            from src.vcs.gitlab_credentials import user_token
+            return user_token(self._get_host_user_id(repo_key), self.provider.provider_name, include_expired=True)
         from src.auth.grape_account_db import get_grape_account_by_id
         from src.session_manager import db, db_lock
         from src.auth.credential_crypto import decrypt
@@ -632,6 +721,9 @@ class UserToken(TokenStrategy):
         回帖链通过 UserTokenHandler.get_comment_token() 调 _fetch() 绕过此检查，
         保留 best-effort 发评论能力。
         """
+        if isinstance(self.provider, GitLabProvider):
+            from src.user.db import get_credential
+            return bool((get_credential(self._get_host_user_id(repo_key), self.provider.provider_name) or {}).get('expired'))
         host_user_id = self._get_host_user_id(repo_key)
         if host_user_id == 0:
             return False  # 路径 A 仓库不走用户 token
@@ -639,6 +731,14 @@ class UserToken(TokenStrategy):
         return is_identity_expired(host_user_id, self.provider.provider_name)
 
     def mark_expired(self, repo_key: str):
+        if isinstance(self.provider, GitLabProvider):
+            from src.user.db import get_credential, set_credential
+            uid = self._get_host_user_id(repo_key)
+            config = get_credential(uid, self.provider.provider_name) or {}
+            if config:
+                config['expired'] = True
+                set_credential(uid, self.provider.provider_name, config)
+            return
         host_user_id = self._get_host_user_id(repo_key)
         if host_user_id > 0:
             from src.auth.grape_account_db import mark_identity_expired
@@ -907,6 +1007,8 @@ class RepoBotTokenHandler(TokenActionHandler):
         # 仓库级 bot 过期 → fallback 到全局 bot
         if result.provider:
             try:
+                if isinstance(result.provider, GitLabProvider):
+                    return result.provider.instance.token
                 from src.user.db import _get_global_bot_token, get_global_github_bot_token
                 if result.provider.provider_name == "github":
                     return get_global_github_bot_token() or ""
@@ -1023,6 +1125,8 @@ class UserTokenHandler(TokenActionHandler):
         # 用户 token 完全不可用 → fallback 全局 bot token
         if result.provider:
             try:
+                if isinstance(result.provider, GitLabProvider):
+                    return result.provider.instance.token
                 from src.user.db import _get_global_bot_token, get_global_github_bot_token
                 if result.provider.provider_name == "github":
                     return get_global_github_bot_token() or ""

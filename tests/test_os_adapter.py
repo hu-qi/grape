@@ -150,10 +150,14 @@ class TestExtraSkillDirs:
         assert os_adapter.extra_skill_dirs() == []
 
     def test_unix_separator(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("RUNTIME_EXTRA_SKILL_DIRS", str(tmp_path))
+        # Relative directories avoid mixing a Windows drive colon into the
+        # Unix separator contract while still testing real directory checks.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "first").mkdir()
+        (tmp_path / "second").mkdir()
+        monkeypatch.setenv("RUNTIME_EXTRA_SKILL_DIRS", "first:second")
         with patch.object(os_adapter, "_IS_WINDOWS", False):
-            result = os_adapter.extra_skill_dirs()
-            assert str(tmp_path) in result
+            assert os_adapter.extra_skill_dirs() == ["first", "second"]
 
     def test_windows_separator(self, monkeypatch, tmp_path):
         dir2 = tmp_path / "dir2"

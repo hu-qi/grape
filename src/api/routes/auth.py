@@ -84,6 +84,10 @@ def get_profile(user: dict = Depends(require_no_session_token)):
     from src.auth.grape_account_db import get_user_identities, has_password
     identities = get_user_identities(user["id"])
     bindings = [ident["provider"] for ident in identities]
+    from src.vcs.gitlab_credentials import bound_providers
+    gitlab_connections = bound_providers(user["id"])
+    from src.vcs.gitlab_config import configured_providers, get_instance
+    gitlab_instances = {p: get_instance(p).url for p in configured_providers()}
     # 兼容旧字段
     gitcode_bound = "gitcode" in bindings or bool(user_db.get_credential(user["id"], "gitcode_oauth"))
     github_bound = "github" in bindings or bool(user_db.get_credential(user["id"], "github_oauth"))
@@ -96,6 +100,8 @@ def get_profile(user: dict = Depends(require_no_session_token)):
         "status": "online",
         "managed_repos": managed,
         "bindings": bindings,
+        "gitlab_connections": gitlab_connections,
+        "gitlab_instances": gitlab_instances,
         "gitcode_bound": gitcode_bound,
         "github_bound": github_bound,
         "email_verified": acc.get("email_verified", 0),

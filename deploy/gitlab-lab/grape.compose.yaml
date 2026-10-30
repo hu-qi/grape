@@ -1,0 +1,72 @@
+name: grape-lab-app
+services:
+  mysql:
+    image: ${MYSQL_IMAGE:?Set MySQL 8.0 image with sha256 digest}
+    restart: unless-stopped
+    env_file: ./mysql.env
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysql -h 127.0.0.1 -u "$${MYSQL_USER}" -D "$${MYSQL_DATABASE}" -e "SELECT 1" >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [database]
+  grape:
+    image: ${GRAPE_IMAGE:?Set tested Grape runtime image with sha256 digest}
+    restart: unless-stopped
+    env_file:
+      - ./runtime.env
+      - ./engine.env
+    environment:
+      TZ: Asia/Shanghai
+      GRAPE_AUTO_DETECT_URL: 'false'
+      COOKIE_SECURE: 'true'
+      DEVOPS_DB_BACKEND: mysql
+      DEVOPS_DB_HOST: mysql
+      DEVOPS_DB_PORT: '3306'
+      DEVOPS_DB_NAME: grape_lab
+      DEVOPS_DB_USER: grape_lab
+      DEVOPS_WORKSPACE_DIR: /app/workspaces
+      HOME: /home/grape
+    volumes:
+      - ./configs:/app/configs
+      - grape-data:/app/data
+      - grape-workspaces:/app/workspaces
+      - engine-home:/home/grape
+    networks: [default, database]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/readyz', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+  ingress:
+    image: ${CADDY_IMAGE:?Set Caddy image with sha256 digest}
+    restart: unless-stopped
+    environment:
+      LAB_HOST: ${LAB_HOST:?Set Grape hostname}
+      UPSTREAM: grape:3000
+    ports:
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls:/etc/caddy/tls:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      grape:
+        condition: service_healthy
+networks:
+  database:
+    internal: true
+volumes:
+  mysql-data:
+  grape-data:
+  grape-workspaces:
+  engine-home:
+  caddy-data:
+  caddy-config:

@@ -25,7 +25,8 @@ class TestOpencodeRuntime:
         assert "run" in args
         assert "--format" in args
         assert "json" in args
-        assert "--dangerously-skip-permissions" in args
+        assert "--auto" in args
+        assert "--dangerously-skip-permissions" not in args
         assert "hello world" not in args
         assert self.backend.prompt_via_stdin is True
 

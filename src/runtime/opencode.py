@@ -12,7 +12,8 @@ class OpencodeRuntime(AgentRuntime):
     prompt_via_stdin = True
 
     def build_args(self, prompt: str, session_id: str = "") -> list[str]:
-        args = ["run", "--format", "json", "--dangerously-skip-permissions"]
+        # OpenCode 1.19.5 uses --auto; the former flag rejects the run before stdin.
+        args = ["run", "--format", "json", "--auto"]
         if session_id:
             args.extend(["--session", session_id])
         # prompt 不作为位置参数传递（stdin 传输，见 prompt_via_stdin）

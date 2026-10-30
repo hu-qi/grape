@@ -70,6 +70,19 @@ def with_oauth_token(user: dict, provider: str, api_call_fn, *args, **kwargs):
     user_id = user["id"]
     username = user["username"]
 
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider):
+        from src.vcs.gitlab_credentials import user_token
+        token = user_token(user_id, provider)
+        if not token:
+            raise HTTPException(401, 'GitLab token missing or expired; update the GitLab connection')
+        try:
+            return api_call_fn(token, *args, **kwargs)
+        except Exception as exc:
+            if _is_token_error(exc):
+                raise HTTPException(401, 'GitLab token expired; update the GitLab connection') from None
+            raise
+
     # 获取 token（带预刷新）
     if provider == "gitcode":
         from src.api.deps import get_user_token_with_refresh

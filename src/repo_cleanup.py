@@ -58,6 +58,9 @@ def _normalize_keys(repo_key: str) -> list[str]:
         return []
     from src.repo_key import parse_repo_key
     provider, owner, repo = parse_repo_key(repo_key)
+    from src.vcs.gitlab_config import is_gitlab
+    if is_gitlab(provider):
+        return [f"{provider}:{owner}/{repo}"]
     base = f"{owner}/{repo}" if owner and repo else repo_key
     keys = [repo_key, f"{provider}:{base}", base]
     return list(dict.fromkeys(k for k in keys if k))
@@ -256,6 +259,9 @@ def _cleanup_files(keys: list[str], owner: str, repo: str, stats: dict) -> None:
             os.path.join(_ws_base, "history", f"gitcode:{owner}", repo),
             os.path.join(_ws_base, "history", owner, _provider, f"{owner}_{repo}"),
         ]
+        from src.vcs.gitlab_config import is_gitlab
+        if is_gitlab(_provider):
+            candidates = [workspace_repo_dir(keys[0])]
         _pending_key = keys[0]
         _pending_on = False
         for _dir in candidates:
@@ -317,9 +323,12 @@ def retry_pending_file_cleanups() -> int:
                 done = False
         # workspace 目录
         if owner and repo_name:
-            for cand in (workspace_repo_dir(rk),
-                         os.path.join(WORKSPACE_DIR, owner, repo_name),
-                         os.path.join(WORKSPACE_DIR, repo_name)):
+            from src.vcs.gitlab_config import is_gitlab
+            candidates = [workspace_repo_dir(rk)]
+            if not is_gitlab(provider):
+                candidates.extend([os.path.join(WORKSPACE_DIR, owner, repo_name),
+                                   os.path.join(WORKSPACE_DIR, repo_name)])
+            for cand in candidates:
                 _abs = os.path.normpath(cand)
                 if os.path.isdir(_abs) and _abs.startswith(os.path.normpath(WORKSPACE_DIR) + os.sep):
                     try:

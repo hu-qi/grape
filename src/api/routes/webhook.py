@@ -1252,3 +1252,53 @@ async def a2a_endpoint(request: Request, body: A2AHandoffBody, user: dict | None
         seq = 0
 
     return {"status": "ok", "seq": seq, "agent": agent_name}
+
+
+@router.post('/webhook/gitlab')
+@router.post('/webhook/gitlab/{instance}')
+async def gitlab_webhook(request: Request, instance: str = 'default'):
+    import hmac
+    from src.vcs.gitlab_config import get_instance, validate_project
+    provider = 'gitlab' if instance == 'default' else 'gitlab@' + instance
+    try:
+        config = get_instance(provider)
+    except ValueError:
+        raise HTTPException(404, 'GitLab instance is not configured') from None
+    body = await request.body()
+    if len(body) > 10 * 1024 * 1024:
+        raise HTTPException(413, 'GitLab webhook body too large')
+    try:
+        payload = json.loads(body)
+        project = payload['project']
+        repo = validate_project(project['path_with_namespace'])
+        # Never trust a payload to choose where credentials are sent.
+        if project.get('web_url', '').rstrip('/') != config.web_url(repo):
+            raise ValueError('GitLab project instance mismatch')
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise HTTPException(400, 'Invalid GitLab project payload') from None
+    repo_key = f'{provider}:{repo}'
+    from src.user.db import get_webhook_secret
+    secret = get_webhook_secret(repo_key)
+    if not secret:
+        raise HTTPException(404, 'GitLab project is not hosted')
+    supplied = request.headers.get('X-Gitlab-Token', '')
+    if not supplied:
+        raise HTTPException(401, 'Missing GitLab webhook token')
+    if not hmac.compare_digest(secret.encode(), supplied.encode()):
+        raise HTTPException(403, 'Invalid GitLab webhook token')
+    payload = {key: value for key, value in payload.items() if not key.startswith('_')}
+    body = json.dumps(payload).encode('utf-8')
+    delivery_id = request.headers.get('X-Gitlab-Event-UUID', '')
+    if len(delivery_id) > 128:
+        raise HTTPException(400, 'Invalid GitLab delivery ID')
+    event = request.headers.get('X-Gitlab-Event', 'unknown')
+    if len(event) > 128:
+        raise HTTPException(400, 'Invalid GitLab event')
+    from src.vcs.gitlab_inbox import get_inbox
+    try:
+        accepted = get_inbox().enqueue(provider, repo_key, delivery_id, body, event)
+    except Exception:
+        raise HTTPException(503, 'Cannot persist GitLab delivery; retry later') from None
+    if not accepted:
+        return {'status': 'duplicate'}
+    return {'status': 'ok', 'message': 'pipeline queued'}

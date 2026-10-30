@@ -50,9 +50,9 @@ class TestRepoApiBase:
         from src.repo import Repo
         assert Repo("github:owner/repo").api_base == "https://api.github.com"
 
-    def test_unknown_provider_falls_back_gitcode(self):
+    def test_gitlab_api_base(self):
         from src.repo import Repo
-        assert Repo("gitlab:owner/repo").api_base == "https://gitcode.com/api/v5"
+        assert Repo("gitlab:owner/repo").api_base == "https://gitlab.com/api/v4"
 
 
 class TestRepoCloneUrl:

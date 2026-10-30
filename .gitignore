@@ -97,6 +97,7 @@ scripts/sync_*.py
 scripts/trigger_*.py
 scripts/upgrade_*.py
 scripts/verify_*.py
+!scripts/verify_gitlab.py
 scripts/check-*-*.py
 !scripts/check-i18n-keys.py
 !scripts/check-css-vars.py
@@ -145,3 +146,7 @@ _e2e_test.py
 configs/oauth-providers.json
 .upgrade-backup/
 .project-info/
+
+# Local cloud acceptance manifests, secrets and evidence (never publish).
+.lab-local/
+deploy/gitlab-lab/cli-artifacts/*.whl

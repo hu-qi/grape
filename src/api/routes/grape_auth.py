@@ -1162,6 +1162,7 @@ def get_me(user: dict = Depends(require_no_session_token)):
 
     identities = get_user_identities(user["id"])
     bindings = [ident["provider"] for ident in identities]
+    from src.vcs.gitlab_credentials import bound_providers
     # Issue #372 R10: 检查 token 过期状态（status=4），返回结构化 error_code 供前端映射
     expired_providers = []
     try:
@@ -1184,6 +1185,7 @@ def get_me(user: dict = Depends(require_no_session_token)):
         "has_password": has_password(user["id"]),
         "identities": identities,
         "bindings": bindings,
+        "gitlab_connections": bound_providers(user["id"]),
         "token_expired_providers": expired_providers,
     }
 

@@ -252,6 +252,10 @@ Every contribution, code or otherwise, makes Grape better.
   - Feature suggestions: describe the use case and expected behavior
 - **Feishu**: feedback directly in your bound group chat after connecting Grape
 
+## GitLab integration
+
+GitLab.com and multiple self-managed GitLab instances can be connected using personal access tokens, with instance-scoped repositories and webhooks. See the [GitLab integration guide](docs/gitlab/README.md) for configuration, APIs and verification boundaries.
+
 ## License
 
 MIT

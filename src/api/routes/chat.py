@@ -336,6 +336,11 @@ def _resolve_gitcode_token(user_token: str, repo_key: str = "") -> str:
     - 无 user_token 时调 resolve_repo_token() 走 TokenResolver 策略链获取
     R20.8.4: token 过期时不重试（TokenResolver 短路返回空串，agent 不注入 token）。
     """
+    from src.vcs.gitlab_config import is_gitlab
+    from src.repo_key import parse_repo_key
+    if repo_key and is_gitlab(parse_repo_key(repo_key)[0]):
+        from src.vcs.gitlab_credentials import repo_token
+        return repo_token(repo_key)
     if user_token:
         return user_token
     if repo_key:

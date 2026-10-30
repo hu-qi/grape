@@ -15,6 +15,8 @@ def clean_db():
     from src.session_manager import db, db_lock
     with db_lock:
         c = db.cursor()
+        # Messages have no repo_key; clean these test-owned children explicitly.
+        c.execute("DELETE FROM chat_messages WHERE conversation_id IN ('c1', 'keep1')")
         for tbl in ("events", "event_skipped", "chat_conversations", "chat_messages",
                     "chat_agent_session", "repo_im_group_binding", "pipeline_instances",
                     "devops_agent_session", "vod_conversations", "skill"):
@@ -27,6 +29,9 @@ def clean_db():
                 pass
         db.commit()
     yield db
+    with db_lock:
+        db.execute("DELETE FROM chat_messages WHERE conversation_id IN ('c1', 'keep1')")
+        db.commit()
 
 
 def _insert(db, table, cols, vals):

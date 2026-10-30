@@ -1,0 +1,124 @@
+diff --git a/src/commands/git.py b/src/commands/git.py
+index a5f0025..4925071 100644
+--- a/src/commands/git.py
++++ b/src/commands/git.py
+@@ -6 +6 @@
+-- 识别到 gitcode 仓库 → `GET /api/repos/{o}/{r}/git-credential` 换券，仅以 GIT_CONFIG env
++- 识别到 HTTPS Git 仓库 → `GET /api/repos/{o}/{r}/git-credential` 换券，仅以 GIT_CONFIG env
+@@ -15 +15 @@ import sys
+-from urllib.parse import urlsplit
++from urllib.parse import urlsplit, unquote, quote
+@@ -21 +20,0 @@ from src.client import ApiClient, CliError, basic_auth
+-_GITCODE_HOSTS = frozenset({"gitcode.com", "www.gitcode.com"})
+@@ -23 +22,2 @@ _GITCODE_HOSTS = frozenset({"gitcode.com", "www.gitcode.com"})
+-_EXTRA_HEADER = "http.extraheader"
++
++
+@@ -30 +30 @@ def _repo_from_url(url: str) -> str:
+-    """从 git URL 解析 owner/repo（gitcode 形态），不匹配返回空串。
++    """从 Git URL 解析完整项目路径（含 GitLab 子组）；无有效主机/路径返回空串。
+@@ -45 +45 @@ def _repo_from_url(url: str) -> str:
+-    if host.lower() not in _GITCODE_HOSTS:
++    if not host:
+@@ -47 +47 @@ def _repo_from_url(url: str) -> str:
+-    path = path.strip("/")
++    path = unquote(path).strip("/")
+@@ -51,2 +51,2 @@ def _repo_from_url(url: str) -> str:
+-    if len(parts) >= 2:
+-        return f"{parts[0]}/{parts[1]}"
++    if len(parts) >= 2 and not any(p in (".", "..") for p in parts):
++        return "/".join(parts)
+@@ -80 +80 @@ def _inject_git_credentials(owner_repo: str, env: dict) -> None:
+-    """换券并注入 http.extraheader 到子进程 env；凭据缺字段抛 CliError。"""
++    """换券并注入 http.extraheader 到子进程 env；凭据缺字段抛 CliError；认证头仅作用于服务端确认的 clone_url。"""
+@@ -82 +82 @@ def _inject_git_credentials(owner_repo: str, env: dict) -> None:
+-    _s, cred = api.request("GET", f"/api/repos/{owner_repo}/git-credential")
++    _s, cred = api.request("GET", f"/api/repos/{quote(owner_repo, safe='/')}/git-credential")
+@@ -88,0 +89,5 @@ def _inject_git_credentials(owner_repo: str, env: dict) -> None:
++    clone_url = cred.get("clone_url") or f"https://gitcode.com/{owner_repo}.git"
++    parsed = urlsplit(clone_url)
++    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
++            or parsed.query or parsed.fragment or _repo_from_url(clone_url) != owner_repo):
++        raise CliError("server returned an invalid credential repository URL")
+@@ -91 +96 @@ def _inject_git_credentials(owner_repo: str, env: dict) -> None:
+-    env[f"GIT_CONFIG_KEY_{idx}"] = _EXTRA_HEADER
++    env[f"GIT_CONFIG_KEY_{idx}"] = f"http.{clone_url}.extraheader"
+diff --git a/test/test_git.py b/test/test_git.py
+index 1a3206f..9b2b2be 100644
+--- a/test/test_git.py
++++ b/test/test_git.py
+@@ -88,3 +88,3 @@ def test_repo_from_url_ssh_scheme():
+-def test_repo_from_url_rejects_non_gitcode():
+-    assert git_mod._repo_from_url("https://github.com/x/y.git") == ""
+-    assert git_mod._repo_from_url("https://gitlab.com/x/y.git") == ""
++def test_repo_from_url_supports_registered_providers():
++    assert git_mod._repo_from_url("https://github.com/x/y.git") == "x/y"
++    assert git_mod._repo_from_url("https://gitlab.com/x/y.git") == "x/y"
+@@ -114,2 +114,2 @@ def test_repo_from_args_clone_uses_url_arg():
+-def test_repo_from_args_clone_non_gitcode_empty():
+-    assert git_mod._repo_from_args(["clone", "https://github.com/x/y.git"]) == ""
++def test_repo_from_args_clone_github():
++    assert git_mod._repo_from_args(["clone", "https://github.com/x/y.git"]) == "x/y"
+@@ -132 +132 @@ def test_git_clone_injects_credentials_from_url(git_env, monkeypatch):
+-    assert env["GIT_CONFIG_KEY_0"] == "http.extraheader"
++    assert env["GIT_CONFIG_KEY_0"] == "http.https://gitcode.com/o/r.git.extraheader"
+diff --git a/test/test_gitlab_transport.py b/test/test_gitlab_transport.py
+new file mode 100644
+index 0000000..6a660f7
+--- /dev/null
++++ b/test/test_gitlab_transport.py
+@@ -0,0 +1,45 @@
++import subprocess
++from src.commands import git as git_mod
++
++
++def test_private_nested_repository_is_detected():
++    assert git_mod._repo_from_url('https://gitlab.example/group/sub/project.git') == 'group/sub/project'
++
++
++def test_scoped_header_is_not_sent_to_other_hosts_or_projects(monkeypatch):
++    class Api:
++        def request(self, method, path):
++            assert path == '/api/repos/group/sub/project/git-credential'
++            return 200, {'username': 'oauth2', 'password': 'test-only-secret',
++                         'clone_url': 'https://gitlab.example/group/sub/project.git'}
++    monkeypatch.setattr(git_mod, 'ApiClient', Api)
++    import os
++    env = os.environ.copy()
++    git_mod._inject_git_credentials('group/sub/project', env)
++    allowed = subprocess.run(['git', 'config', '--get-urlmatch', 'http.extraheader',
++                              'https://gitlab.example/group/sub/project.git/info/refs'], env=env, capture_output=True)
++    assert allowed.returncode == 0
++    for url in ['https://evil.example/group/sub/project.git',
++                'https://gitlab.example/group/sub/other.git',
++                'http://gitlab.example/group/sub/project.git']:
++        denied = subprocess.run(['git', 'config', '--get-urlmatch', 'http.extraheader', url], env=env, capture_output=True)
++        assert denied.returncode != 0
++        assert not denied.stdout
++
++
++def test_credential_url_must_match_the_requested_repository(monkeypatch):
++    import pytest
++    from src.client import CliError
++    class Api:
++        def request(self, method, path):
++            return 200, {'username': 'oauth2', 'password': 'test-only-secret',
++                         'clone_url': 'https://gitlab.example/other/project.git'}
++    monkeypatch.setattr(git_mod, 'ApiClient', Api)
++    env = {}
++    with pytest.raises(CliError, match='invalid credential repository URL'):
++        git_mod._inject_git_credentials('group/project', env)
++    assert 'GIT_CONFIG_COUNT' not in env
++
++
++def test_url_with_encoded_parent_component_is_rejected():
++    assert git_mod._repo_from_url('https://gitlab.example/group/%2e%2e/project.git') == ''
+diff --git a/test/conftest.py b/test/conftest.py
+index 49f6eee..46959c8 100644
+--- a/test/conftest.py
++++ b/test/conftest.py
+@@ -71 +71,3 @@ class FakeResponse:
+-def _reset_module_state():
++def _reset_module_state(isolate_config, monkeypatch):
++    for name in ("GRAPE_API_TOKEN", "GRAPE_SESSION_TOKEN", "GRAPE_BASE_URL", "GRAPE_CLI_MODE"):
++        monkeypatch.delenv(name, raising=False)
