@@ -37,6 +37,8 @@
 
 另行取得经过审查的独立 Grape CLI wheel，放入 `deploy/gitlab-lab/cli-artifacts/`（该目录的 wheel 已被 Git 忽略），记录其来源提交和 SHA256。构建要求目录中恰好一个 wheel，并通过 `GRAPE_CLI_WHEEL_SHA256` 校验后安装到独立虚拟环境。CLI 与服务端都使用顶层 `src` 包；镜像内的 `grape` 启动器使用 Python 隔离模式，避免工作目录或 `PYTHONPATH` 导致导入错误。不要从公共 PyPI 上按同名包猜测安装，也不要在镜像构建中传入私有仓库凭据。
 
+独立 CLI 0.3.3（源码提交 `7eb77b906cff9e9bcd5ee048b756070609e91b73`）的 `grape git` 仅识别 GitCode。使用该基线时，先在独立源码工作副本用 `git apply --check --unidiff-zero` 检查本目录的 `grape-cli-gitlab.patch`，再用 `git apply --unidiff-zero` 应用、运行其完整测试并构建 wheel。补丁保留 GitLab 子组路径，并按服务端返回的 `clone_url` 限定认证头；包含真实 Git URL 匹配测试，验证其他主机、仓库或 HTTP 请求不会取得认证头。不要直接使用未修补的 0.3.3 验证私有仓库推送。补丁尚需独立 CLI 上游接纳；不要将其 wheel 或私有源码提交到本仓库。
+
 从仓库根目录构建，以下变量都应来自本地配置，不含登录凭据：
 
 ```sh
